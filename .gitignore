@@ -1,4 +1,5 @@
-/__pycache__
-/config.py
+config.py
 venv/
 barbaricutils.log
+stats.csv
+__pycache__/
