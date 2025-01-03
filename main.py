@@ -1,9 +1,14 @@
+import bisect
 import logging
+import os
 from pathlib import Path
+import time
 
 import discord
 from discord import option
 from discord.ext import commands
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from classes import clash_stats, wiki_operations
 import config
@@ -39,6 +44,52 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
         logging.error(error)
         raise error
 
+class FileModifiedEventHandler(FileSystemEventHandler):
+    def __init__(self):
+        self.last_modified = time.time()
+        
+    def on_modified(self, event):
+        if event.is_directory or time.time() - self.last_modified < 1:
+            return
+        else:
+            self.last_modified = time.time()
+        
+        start_time = time.time()
+        previous_size = -1
+        stable_count = 0
+        max_stable_checks = 3  # Number of checks to ensure the file size is stable
+
+        while True:
+            try:
+                current_size = os.path.getsize(event.src_path)
+            except FileNotFoundError:
+                # If the file is temporarily unavailable, wait and retry
+                current_size = -1
+
+            if current_size == previous_size and current_size > 0:
+                stable_count += 1
+                if stable_count >= max_stable_checks:
+                    break
+            else:
+                stable_count = 0  # Reset the counter if the size changes
+            
+            if time.time() - start_time > 2:
+                logging.warning(f"Timeout waiting for size of '{event.src_path}' to become non-zero. No changes were made.")
+                return
+            
+            previous_size = current_size
+            time.sleep(0.1)
+
+        try:
+            clash_stats.PAGES_WITH_MANUAL_ENTRIES = set([line.rstrip() for line in open("./updatemanually.txt") if line != '\n'])
+        except OSError as e:
+            logging.error(f"Error reading file '{event.src_path}': {e}")
+        
+
+observer = Observer()
+observer.schedule(FileModifiedEventHandler(), "./updatemanually.txt", recursive = False)
+observer.start()
+
 ####################################################################
 ############################ COMMANDS ##############################
 ####################################################################
@@ -58,7 +109,7 @@ async def ping(ctx: discord.ApplicationContext):
 @option(
     "module",
     description="The module you want to update",
-    autocomplete=discord.utils.basic_autocomplete(clash_stats.DATA_MODULE_NAMES)
+    autocomplete=discord.utils.basic_autocomplete(clash_stats.autocomplete_module_names)
 )
 @option(
     "wiki",
@@ -68,19 +119,24 @@ async def ping(ctx: discord.ApplicationContext):
 )
 @commands.is_owner()
 async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, module: str, wiki: str):
-    if not module.startswith('Modul:'):
-        module = "Modul:" + module
-
     if not file.content_type.startswith("text/csv;"):
         await ctx.respond(embed=create_embed(description="The file you uploaded doesn't seem to be a CSV file.",
                                              color=0xFF0000), ephemeral=True)
         return
     
+    if not module in clash_stats.DATA_MODULE_NAMES:
+        await ctx.respond(embed=create_embed(description="There is no module with this name!",
+                                             color=0xFF0000), ephemeral=True)
+        return
+    
+    if not module.startswith('Modul:'):
+        module = "Modul:" + module
+    
     await ctx.defer()
 
     try:
         await file.save(Path(clash_stats.FILE_PATH))
-    except (Exception,):
+    except:
         await ctx.respond(embed=create_embed(description="Something went wrong upon uploading your file. "
                                                          "Please try again.", color=0xFF0000), ephemeral=True)
         return
@@ -98,11 +154,21 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
 
 @bot.slash_command(
     name="addmodule",
-    description="Adds a new module name to the module selection list"
+    description="Adds a new module name to the module selection list (duplicates are ignored)"
 )
 @commands.is_owner()
 async def addmodule(ctx: discord.ApplicationContext, name: str):
-    clash_stats.DATA_MODULE_NAMES.append(name)
+    bisect.insort(clash_stats.DATA_MODULE_NAMES, name, key=str.lower)
+    clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(clash_stats.DATA_MODULE_NAMES))
+    
+    try:
+        with open("csvmodules.txt", 'a') as file:
+            file.write(name + '\n')
+    except OSError as e:
+        logging.error(f"Failed to store module name to file: {e}")
+        await ctx.respond(embed=create_embed(description="Added the new name until next restart, but couldn't store it.", color=0xFF0000))
+        return
+    
     await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
 
 
@@ -112,12 +178,26 @@ async def addmodule(ctx: discord.ApplicationContext, name: str):
 )
 @option(
     "name",
-    description="The module name want to remove",
-    autocomplete=discord.utils.basic_autocomplete(clash_stats.DATA_MODULE_NAMES)
+    description="The module name you want to remove",
+    autocomplete=discord.utils.basic_autocomplete(clash_stats.autocomplete_module_names)
 )
 @commands.is_owner()
 async def removemodule(ctx: discord.ApplicationContext, name: str):
-    clash_stats.DATA_MODULE_NAMES.remove(name)
+    try:
+        clash_stats.DATA_MODULE_NAMES.remove(name)
+    except ValueError:
+        await ctx.respond(embed=create_embed(description="This module does not exist!", color=0xFF0000))
+        return
+    
+    try:
+        with open("csvmodules.txt", 'w') as file:
+            for module in clash_stats.DATA_MODULE_NAMES:
+                file.write(f"{module}\n")
+    except OSError as e:
+        logging.error(f"Failed to remove module name from file, file might be empty now: {e}")
+        await ctx.respond(embed=create_embed(description="Removed the new name until next restart, but saving failed.", color=0xFF0000))
+        return
+    
     await ctx.respond(embed=create_embed(description="Removed the module name!", color=0x00FF00))
 
 ##################################################################
@@ -126,6 +206,20 @@ async def removemodule(ctx: discord.ApplicationContext, name: str):
 
 @bot.listen(once=True)
 async def on_ready():
+    # initialize txt files
+    try:
+        clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(sorted([line.rstrip() for line in open("csvmodules.txt")], key=str.lower)))
+        clash_stats.PAGES_WITH_MANUAL_ENTRIES = set([line.rstrip() for line in open("updatemanually.txt") if line != '\n'])
+    except OSError as e:
+        logging.error(f"Error when reading initializing txt files: {e}")
+        pass
+
     logging.info(f'Logged in as {bot.user}')
 
+
 bot.run(config.DISCORD_TOKEN)
+
+observer.stop()
+observer.join()
+
+#TODO: hash configs, create command for updating manual pages, instead of editing the txt itself, implement scheduling stuff

@@ -8,90 +8,13 @@ from classes import wiki_operations
 import config
 
 FILE_PATH = "./stats.csv"
-DATA_MODULE_NAMES = [  # TODO: export both globals to file
-    "Building/data",
-    "Building2/data",
-    "Building3/data",
-    "Equipment/data",
-    "Hero/data",
-    "Hero2/data",
-    "Pet/data",
-    "Spell/data",
-    "Spell3/data",
-    "Supercharge/data",
-    "Trap/data",
-    "Trap2/data",
-    "Trap3/data",
-    "Troop/data",
-    "Troop2/data",
-    "Troop3/data",
-]
+DATA_MODULE_NAMES = []
 
-# list of pages that have entries not contained in the CSV (e.g. AltDPS for Electro Titan), that need to be updated
-# manually
-PAGES_WITH_MANUAL_ENTRIES = [
-    "Minenwerfer",
-    "Monolith",
-    "Zauberturm",
+# list of pages that have entries not contained in the CSV (e.g. AltDPS for Electro Titan), that need to be updated manually
+PAGES_WITH_MANUAL_ENTRIES = set()
 
-    "Armeelager (Bauarbeiterbasis)",
-    "Uhrenturm",
-    "Multimörser",
-    "O.T.T.O.s Außenposten",
-
-    "Mauer (Clanstadt)",
-    "Kanone (Clanstadt)",
-    "Speerwerfer",
-    "Luftabwehr (Clanstadt)",
-    "Multikanone",
-    "Bombenturm (Clanstadt)",
-    "Multimörser (Clanstadt)",
-    "Supermagier-Turm",
-    "Luftbomben (Clanstadt)",
-    "Rasende Raketen",
-    "Zerschmetterer (Clanstadt)",
-    "Verborgener Megatesla",
-    "Riesenkanone (Clanstadt)",
-    "Raketenartillerie",
-    "Infernoturm (Clanstadt)",
-    "Mächtiger Bogen",
-    "Superriesen-Posten",
-    "Plünderkarren-Posten",
-    "Superdrachen-Posten",
-
-    "Kampfmaschine",
-    "Kampfschrauber",
-
-    "Phönix",
-    "Giftechse",
-    "Diggy",
-    "Frosty",
-
-    "Weihnachtspräsent",
-
-    "Skelettfalle",
-    "Tornadofalle",
-
-    "Mine (Clanstadt)",
-    "Megamine (Clanstadt)",
-    "Kampfholzfalle",
-    "Knallfalle",
-
-    "Eisgolem",
-    "Kampfholzwerfer",
-    "Flammenschleuder",
-    "Elektrotitanin",
-
-    "Mutantenlakai",
-    "Haudraufriese",
-    "Skelettballon",
-    "Drachenbaby (Bauarbeiterbasis)",
-    "Nachthexe",
-    "Super-P.E.K.K.A. (Bauarbeiterbasis)",
-    "Elektrofeuermagier",
-
-    "Fliegende Festung"
-]
+async def autocomplete_module_names(ctx):
+    return DATA_MODULE_NAMES
 
 
 def find_dict_by_target(to_search: dict, to_find: str):
