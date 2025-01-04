@@ -1,14 +1,11 @@
 import bisect
+import json
 import logging
-import os
 from pathlib import Path
-import time
 
 import discord
 from discord import option
 from discord.ext import commands
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 
 from classes import clash_stats, wiki_operations
 import config
@@ -43,52 +40,6 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
     else:
         logging.error(error)
         raise error
-
-class FileModifiedEventHandler(FileSystemEventHandler):
-    def __init__(self):
-        self.last_modified = time.time()
-        
-    def on_modified(self, event):
-        if event.is_directory or time.time() - self.last_modified < 1:
-            return
-        else:
-            self.last_modified = time.time()
-        
-        start_time = time.time()
-        previous_size = -1
-        stable_count = 0
-        max_stable_checks = 3  # Number of checks to ensure the file size is stable
-
-        while True:
-            try:
-                current_size = os.path.getsize(event.src_path)
-            except FileNotFoundError:
-                # If the file is temporarily unavailable, wait and retry
-                current_size = -1
-
-            if current_size == previous_size and current_size > 0:
-                stable_count += 1
-                if stable_count >= max_stable_checks:
-                    break
-            else:
-                stable_count = 0  # Reset the counter if the size changes
-            
-            if time.time() - start_time > 2:
-                logging.warning(f"Timeout waiting for size of '{event.src_path}' to become non-zero. No changes were made.")
-                return
-            
-            previous_size = current_size
-            time.sleep(0.1)
-
-        try:
-            clash_stats.PAGES_WITH_MANUAL_ENTRIES = set([line.rstrip() for line in open("./updatemanually.txt") if line != '\n'])
-        except OSError as e:
-            logging.error(f"Error reading file '{event.src_path}': {e}")
-        
-
-observer = Observer()
-observer.schedule(FileModifiedEventHandler(), "./updatemanually.txt", recursive = False)
-observer.start()
 
 ####################################################################
 ############################ COMMANDS ##############################
@@ -153,18 +104,22 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
 
 
 @bot.slash_command(
-    name="addmodule",
+    name="add_module",
     description="Adds a new module name to the module selection list (duplicates are ignored)"
 )
+@option(
+    "name",
+    description="The name of the module you want to add"
+)
 @commands.is_owner()
-async def addmodule(ctx: discord.ApplicationContext, name: str):
+async def add_module(ctx: discord.ApplicationContext, name: str):
     bisect.insort(clash_stats.DATA_MODULE_NAMES, name, key=str.lower)
     clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(clash_stats.DATA_MODULE_NAMES))
     
     try:
-        with open("csvmodules.txt", 'a') as file:
-            file.write(name + '\n')
-    except OSError as e:
+        with open(clash_stats.MODULE_LIST_FILE_PATH, 'w') as file:
+            json.dump(clash_stats.DATA_MODULE_NAMES, file, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError) as e:
         logging.error(f"Failed to store module name to file: {e}")
         await ctx.respond(embed=create_embed(description="Added the new name until next restart, but couldn't store it.", color=0xFF0000))
         return
@@ -173,16 +128,16 @@ async def addmodule(ctx: discord.ApplicationContext, name: str):
 
 
 @bot.slash_command(
-    name="removemodule",
+    name="remove_module",
     description="Removes a module name from the module selection list"
 )
 @option(
     "name",
-    description="The module name you want to remove",
+    description="The name of the module you want to remove",
     autocomplete=discord.utils.basic_autocomplete(clash_stats.autocomplete_module_names)
 )
 @commands.is_owner()
-async def removemodule(ctx: discord.ApplicationContext, name: str):
+async def remove_module(ctx: discord.ApplicationContext, name: str):
     try:
         clash_stats.DATA_MODULE_NAMES.remove(name)
     except ValueError:
@@ -190,15 +145,85 @@ async def removemodule(ctx: discord.ApplicationContext, name: str):
         return
     
     try:
-        with open("csvmodules.txt", 'w') as file:
-            for module in clash_stats.DATA_MODULE_NAMES:
-                file.write(f"{module}\n")
-    except OSError as e:
+        with open(clash_stats.MODULE_LIST_FILE_PATH, 'w') as file:
+            json.dump(clash_stats.DATA_MODULE_NAMES, file, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError) as e:
         logging.error(f"Failed to remove module name from file, file might be empty now: {e}")
         await ctx.respond(embed=create_embed(description="Removed the new name until next restart, but saving failed.", color=0xFF0000))
         return
     
     await ctx.respond(embed=create_embed(description="Removed the module name!", color=0x00FF00))
+
+
+@bot.slash_command(
+    name="add_observable_page",
+    description="Adds a new page to be warned about when updating the wiki data"
+)
+@option(
+    "category",
+    description="The category this page belongs to (is created if not listed)",
+    autocomplete=discord.utils.basic_autocomplete(clash_stats.autocomplete_page_categories)
+)
+@option(
+    "name",
+    description="The name of the page you want to be observed"
+)
+@commands.is_owner()
+async def add_observable_page(ctx: discord.ApplicationContext, category: str, name: str):
+    observable_pages = clash_stats.PAGES_WITH_MANUAL_ENTRIES
+    
+    bisect.insort(observable_pages.setdefault(category, []), name)
+    clash_stats.PAGES_WITH_MANUAL_ENTRIES = {key: observable_pages[key] for key in sorted(observable_pages.keys(), key=str.lower)}
+
+    try:
+        with open(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH, 'w') as file:
+            json.dump(clash_stats.PAGES_WITH_MANUAL_ENTRIES, file, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(f"Failed to store page name to file: {e}")
+        await ctx.respond(embed=create_embed(description="Added the new name until next restart, but couldn't store it.", color=0xFF0000))
+        return
+    
+    await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
+
+
+@bot.slash_command(
+    name="remove_observable_page",
+    description="Removes a page or category from the observer list (does nothing if name doesn't exist)"
+)
+@option(
+    "name",
+    description="The page name you want to remove (its category is also removed if empty)",
+    autocomplete=clash_stats.autocomplete_page_observer_names
+)
+@commands.is_owner()
+async def remove_observable_page(ctx: discord.ApplicationContext, name: str):
+    observable_pages = clash_stats.PAGES_WITH_MANUAL_ENTRIES
+    observable_pages_keys = list(observable_pages.keys())
+    
+    error_counter = 0
+    for key in observable_pages_keys:
+        try:
+            observable_pages[key].remove(name)
+        except ValueError:
+            error_counter += 1
+            pass
+        
+        if len(observable_pages[key]) == 0:
+            del observable_pages[key]
+    
+    if error_counter == len(observable_pages_keys):
+        await ctx.respond(embed=create_embed(description="Name doesn't exist!", color=0xFF0000))
+        return
+    
+    try:
+        with open(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH, 'w') as file:
+            json.dump(observable_pages, file, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(f"Failed to remove page name from file, file might be empty now: {e}")
+        await ctx.respond(embed=create_embed(description="Removed the new name until next restart, but saving failed.", color=0xFF0000))
+        return
+    
+    await ctx.respond(embed=create_embed(description="Removed the page name!", color=0x00FF00))
 
 ##################################################################
 ############################ RUN BOT #############################
@@ -206,12 +231,18 @@ async def removemodule(ctx: discord.ApplicationContext, name: str):
 
 @bot.listen(once=True)
 async def on_ready():
-    # initialize txt files
+    # initialize json files
     try:
-        clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(sorted([line.rstrip() for line in open("csvmodules.txt")], key=str.lower)))
-        clash_stats.PAGES_WITH_MANUAL_ENTRIES = set([line.rstrip() for line in open("updatemanually.txt") if line != '\n'])
-    except OSError as e:
-        logging.error(f"Error when reading initializing txt files: {e}")
+        with open(clash_stats.MODULE_LIST_FILE_PATH, 'r') as file:
+            clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(sorted(json.load(file), key=str.lower)))
+        
+        with open(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH, 'r') as file:
+            data = json.load(file)
+            sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
+            sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
+            clash_stats.PAGES_WITH_MANUAL_ENTRIES = sorted_data
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(f"Error when reading initializing json files: {e}")
         pass
 
     logging.info(f'Logged in as {bot.user}')
@@ -219,7 +250,5 @@ async def on_ready():
 
 bot.run(config.DISCORD_TOKEN)
 
-observer.stop()
-observer.join()
-
-#TODO: hash configs, create command for updating manual pages, instead of editing the txt itself, implement scheduling stuff
+#TODO: hash configs, create command for updating manual pages, instead of editing the txt itself, implement scheduling stuff,
+# output über manual pages als bot nachricht, nicht als log, list observed pages

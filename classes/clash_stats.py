@@ -1,20 +1,60 @@
 import csv
 import logging
+import re
 
+import discord
 import requests
 from slpp import slpp as lua
 
 from classes import wiki_operations
 import config
 
-FILE_PATH = "./stats.csv"
+CSV_FILE_PATH = "./stats.csv"
+MODULE_LIST_FILE_PATH = "./csvmodules.json"
+OBSERVABLE_PAGES_LIST_FILE_PATH = "./updatemanually.json"
 DATA_MODULE_NAMES = []
 
 # list of pages that have entries not contained in the CSV (e.g. AltDPS for Electro Titan), that need to be updated manually
-PAGES_WITH_MANUAL_ENTRIES = set()
+PAGES_WITH_MANUAL_ENTRIES: dict[str, list[str]] = {}
 
-async def autocomplete_module_names(ctx):
+
+async def autocomplete_module_names(ctx: discord.AutocompleteContext):
     return DATA_MODULE_NAMES
+
+
+async def autocomplete_page_categories(ctx: discord.AutocompleteContext):
+    return PAGES_WITH_MANUAL_ENTRIES.keys()
+    
+
+async def autocomplete_page_observer_names(ctx: discord.AutocompleteContext):
+    user_input = ctx.value.removeprefix("[KATEGORIE] ").split("(Seite")[0].strip()
+    
+    def check(page: str):
+        return page.lower().startswith(user_input.lower())
+    
+    if user_input == "":  # show categories for user to click on
+        return [("[KATEGORIE] " + page) for page in PAGES_WITH_MANUAL_ENTRIES.keys()]
+    elif user_input in PAGES_WITH_MANUAL_ENTRIES.keys():
+        result = [page for page in PAGES_WITH_MANUAL_ENTRIES[user_input]]
+    else:
+        result = [page for pages in PAGES_WITH_MANUAL_ENTRIES.values() for page in pages if check(page)]  # populate result array while applying filter
+    
+    def get_page_number(ctx_value):
+        number = re.search(r"\(Seite (\d+)\)", ctx_value)
+        if number:
+            return int(number.group(1))
+    
+    # pagination logic, if more than 25 entries
+    if '▶' in ctx.value:  # if there is no '▶' we don't need to do the regex and can directly set 1 as page number
+        page_number = get_page_number(ctx.value)
+    else:
+        page_number = 1
+        
+    if len(result) > ((page_number - 1) * 24 + 25):
+        result = result[(page_number - 1) * 24:page_number * 24]
+        result.append(f"{user_input} (Seite {page_number + 1}) ▶")
+        return result
+    return result[(page_number - 1) * 24:]
 
 
 def find_dict_by_target(to_search: dict, to_find: str):
@@ -42,9 +82,12 @@ def update_values(current_dict: dict, to_add: dict):
 
 
 def update_wiki_stats(page: str, wiki: str):
-    reader = csv.DictReader(open(FILE_PATH))
+    reader = csv.DictReader(open(CSV_FILE_PATH))
     result = {}
     current_key = ""
+    
+    def flatten(xss: list[list[object]]):
+        return [x for xs in xss for x in xs]
 
     for row in reader:
         if all((item.lower() in ['string', 'int', 'boolean', '']) for item in row.values()):
@@ -76,7 +119,7 @@ def update_wiki_stats(page: str, wiki: str):
         update_values(v, result_value)
 
         # there were changes to a page that has manually updated entries
-        if (v_before != v) and (k in PAGES_WITH_MANUAL_ENTRIES):
+        if (v_before != v) and (k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))):
             logging.warning(f"Possibly manual update necessary: {k}")
             print('\033[93m' + "Possibly manual update necessary: " + k + '\033[0m')
 

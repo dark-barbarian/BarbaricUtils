@@ -1,0 +1,75 @@
+{
+    "Fallen": [
+        "Skelettfalle",
+        "Tornadofalle"
+    ],
+    "Fallen (Clanstadt)": [
+        "Kampfholzfalle",
+        "Knallfalle",
+        "Megamine (Clanstadt)",
+        "Mine (Clanstadt)"
+    ],
+    "Gebäude": [
+        "Minenwerfer",
+        "Monolith",
+        "Zauberturm"
+    ],
+    "Gebäude (Bauarbeiterbasis)": [
+        "Armeelager (Bauarbeiterbasis)",
+        "Multimörser",
+        "O.T.T.O.s Außenposten",
+        "Uhrenturm"
+    ],
+    "Gebäude (Clanstadt)": [
+        "Bombenturm (Clanstadt)",
+        "Infernoturm (Clanstadt)",
+        "Kanone (Clanstadt)",
+        "Luftabwehr (Clanstadt)",
+        "Luftbomben (Clanstadt)",
+        "Mauer (Clanstadt)",
+        "Multikanone",
+        "Multimörser (Clanstadt)",
+        "Mächtiger Bogen",
+        "Plünderkarren-Posten",
+        "Raketenartillerie",
+        "Rasende Raketen",
+        "Riesenkanone (Clanstadt)",
+        "Speerwerfer",
+        "Superdrachen-Posten",
+        "Supermagier-Turm",
+        "Superriesen-Posten",
+        "Verborgener Megatesla",
+        "Zerschmetterer (Clanstadt)"
+    ],
+    "Helden (Bauarbeiterbasis)": [
+        "Kampfmaschine",
+        "Kampfschrauber"
+    ],
+    "Heldentiere": [
+        "Diggy",
+        "Frosty",
+        "Giftechse",
+        "Phönix"
+    ],
+    "Truppen": [
+        "Eisgolem",
+        "Elektrotitanin",
+        "Flammenschleuder",
+        "Kampfholzwerfer"
+    ],
+    "Truppen (Bauarbeiterbasis)": [
+        "Drachenbaby (Bauarbeiterbasis)",
+        "Elektrofeuermagier",
+        "Haudraufriese",
+        "Mutantenlakai",
+        "Nachthexe",
+        "Skelettballon",
+        "Super-P.E.K.K.A. (Bauarbeiterbasis)"
+    ],
+    "Truppen (Clanstadt)": [
+        "Fliegende Festung"
+    ],
+    "Zauber": [
+        "Weihnachtspräsent"
+    ]
+}
