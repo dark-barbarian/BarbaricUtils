@@ -1,6 +1,6 @@
 import threading
 
-from classes import fandom_auth
+from utils import fandom_auth
 
 
 URL = ""

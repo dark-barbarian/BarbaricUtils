@@ -6,7 +6,7 @@ import discord
 import requests
 from slpp import slpp as lua
 
-from classes import wiki_operations
+from utils import wiki_operations
 import config
 
 CSV_FILE_PATH = "./stats.csv"

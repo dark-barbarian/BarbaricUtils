@@ -7,8 +7,9 @@ import discord
 from discord import option
 from discord.ext import commands
 
-from classes import clash_stats, wiki_operations
+from cogs import clash_stats
 import config
+from utils import wiki_operations
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %(message)s', handlers=[
     logging.FileHandler('barbaricutils.log'),
