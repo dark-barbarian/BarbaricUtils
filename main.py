@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 import discord
-from discord import option
+from discord import HTTPException, option
 from discord.ext import commands
 
 from cogs import clash_stats
@@ -87,10 +87,11 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
     await ctx.defer()
 
     try:
-        await file.save(Path(clash_stats.FILE_PATH))
-    except:
+        await file.save(Path(clash_stats.CSV_FILE_PATH))
+    except HTTPException as e:
         await ctx.respond(embed=create_embed(description="Something went wrong upon uploading your file. "
                                                          "Please try again.", color=0xFF0000), ephemeral=True)
+        logging.error(f"Saving the attachment failed: {e}")
         return
     
     data = clash_stats.update_wiki_stats(module, wiki)
