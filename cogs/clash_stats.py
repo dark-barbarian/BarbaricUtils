@@ -118,6 +118,7 @@ def update_wiki_stats(page: str, wiki: str):
         v_before = v.copy()
         update_values(v, result_value)
 
+        #TODO: send an actual discord message with all the pages included instead of just logging it
         # there were changes to a page that has manually updated entries
         if (v_before != v) and (k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))):
             logging.warning(f"Possibly manual update necessary: {k}")
