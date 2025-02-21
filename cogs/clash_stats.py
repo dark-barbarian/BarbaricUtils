@@ -84,6 +84,7 @@ def update_values(current_dict: dict, to_add: dict):
 def update_wiki_stats(page: str, wiki: str):
     reader = csv.DictReader(open(CSV_FILE_PATH))
     result = {}
+    update_manually = []
     current_key = ""
     
     def flatten(xss: list[list[object]]):
@@ -121,6 +122,7 @@ def update_wiki_stats(page: str, wiki: str):
         #TODO: send an actual discord message with all the pages included instead of just logging it
         # there were changes to a page that has manually updated entries
         if (v_before != v) and (k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))):
+            update_manually.append(k)
             logging.warning(f"Possibly manual update necessary: {k}")
             print('\033[93m' + "Possibly manual update necessary: " + k + '\033[0m')
 
@@ -130,7 +132,7 @@ def update_wiki_stats(page: str, wiki: str):
     for k, v in result.items():
         in_wiki_version[k] = v
 
-    return wiki_operations.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki)
+    return wiki_operations.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki), update_manually
 
 
 def convert_from_lua(module: str, wiki: str):
