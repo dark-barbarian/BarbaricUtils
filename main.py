@@ -93,8 +93,9 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
                                                          "Please try again.", color=0xFF0000), ephemeral=True)
         logging.error(f"Saving the attachment failed: {e}")
         return
-    
-    data = clash_stats.update_wiki_stats(module, wiki)
+
+    # Todo: ins embed schreiben
+    data, update_manually = clash_stats.update_wiki_stats(module, wiki)
     response = list(data.keys())[0]
     if response == 'edit' and data['edit']['result'] == 'Success':
         await ctx.respond(embed=create_embed(description="Added the data successfully!", color=0x00FF00))
