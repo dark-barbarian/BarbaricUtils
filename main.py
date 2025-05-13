@@ -1,4 +1,6 @@
+import asyncio
 import bisect
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -7,7 +9,7 @@ import discord
 from discord import HTTPException, option
 from discord.ext import commands
 
-from cogs import clash_stats
+from cogs import clash_stats, page_error_reminders
 import config
 from utils import wiki_operations
 
@@ -41,6 +43,56 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
     else:
         logging.error(error)
         raise error
+
+async def check_wiki_page_errors():
+    await bot.wait_until_ready()
+    channel = bot.get_channel(page_error_reminders.CHANNEL_ID)
+    
+    data = page_error_reminders.fetch_categories("darkbarbarian.fandom.com", "Benutzer:DarkBarbarian/WikiCategories.json")
+    if data:
+        page_error_reminders.WIKI_CATEGORIES.update(data)
+        try:
+            with open(page_error_reminders.CATEGORIES_JSON_FILE_PATH, 'w') as file:
+                json.dump(page_error_reminders.WIKI_CATEGORIES, file, ensure_ascii=False, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store wiki categories to file: {e}")
+            return
+    
+    while True:
+        error_counter = 0
+        for wiki, categories in page_error_reminders.WIKI_CATEGORIES.items():
+            if wiki == "allowed_errors":
+                continue
+            
+            message = f"# Category report for {wiki} TODO: change back to (5,12) and change channel id\n"
+            for category in categories:
+                logging.info(f"Checking category '{category}' on wiki '{wiki}'")
+                pages = page_error_reminders.fetch_category_members(wiki, category)
+                
+                message = f"{message}- [{category}](<https://{wiki}/wiki/Kategorie:{category.replace(' ', '_')}>) - "
+                if pages is not None:
+                    error_count = len(pages)
+                    message += f"{error_count} page(s){" :warning:\n" if error_count > 0 else "\n"}"
+                    error_counter += error_count
+                else:
+                    message += "error\n"
+                
+                await asyncio.sleep(1)
+            
+            if error_counter > page_error_reminders.WIKI_CATEGORIES.get("allowed_errors", 0):
+                message += f"<@{bot.owner_id}>"
+            
+            if channel:
+                await channel.send(message)
+        
+        now = datetime.now(timezone.utc).astimezone()
+        days_until = (page_error_reminders.CATEGORY_CHECK_DAY_HOUR[0] - now.weekday()) % 7
+        target_time = (now + timedelta(days=days_until)).replace(hour=page_error_reminders.CATEGORY_CHECK_DAY_HOUR[1], minute=0, second=0, microsecond=0)
+        if now > target_time:
+            target_time += timedelta(weeks=1)
+        
+        await asyncio.sleep((target_time - now).total_seconds())
+        
 
 ####################################################################
 ############################ COMMANDS ##############################
@@ -228,6 +280,30 @@ async def remove_observable_page(ctx: discord.ApplicationContext, name: str):
     
     await ctx.respond(embed=create_embed(description="Removed the page name!", color=0x00FF00))
 
+
+@bot.slash_command(
+    name="update_allowed_errors",
+    description="Updates the amount of errors the category report may yield without notifying a certain someone"
+)
+@option(
+    "value",
+    description="Up to this many errors are allowed and will not result in a ping",
+    input_type=int,
+    min_value=0
+)
+@commands.is_owner()
+async def update_allowed_errors(ctx: discord.ApplicationContext, value: int):
+    page_error_reminders.WIKI_CATEGORIES["allowed_errors"] = value
+    try:
+        with open(page_error_reminders.CATEGORIES_JSON_FILE_PATH, 'w') as file:
+            json.dump(page_error_reminders.WIKI_CATEGORIES, file, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error(f"Failed to store allowed errors to file: {e}")
+        await ctx.respond(embed=create_embed(description="Updated allowed errors until next restart, but saving failed.", color=0xFF0000))
+        return
+    
+    await ctx.respond(embed=create_embed(description="Updated allowed errors in the category report!", color=0x00FF00))
+
 ##################################################################
 ############################ RUN BOT #############################
 ##################################################################
@@ -244,11 +320,15 @@ async def on_ready():
             sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
             sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
             clash_stats.PAGES_WITH_MANUAL_ENTRIES = sorted_data
+        
+        with open(page_error_reminders.CATEGORIES_JSON_FILE_PATH, 'r') as file:
+            page_error_reminders.WIKI_CATEGORIES = json.load(file)
     except (OSError, json.JSONDecodeError) as e:
-        logging.error(f"Error when reading initializing json files: {e}")
+        logging.error(f"Error when reading and initializing json files: {e}")
         pass
 
     logging.info(f'Logged in as {bot.user}')
+    bot.loop.create_task(check_wiki_page_errors())
 
 
 bot.run(config.DISCORD_TOKEN)
