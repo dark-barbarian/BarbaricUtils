@@ -3,9 +3,9 @@ import logging
 import requests
 
 
-CATEGORY_CHECK_DAY_HOUR = (2, 1)  # (weekday (0 to 6), hour)
+CATEGORY_CHECK_DAY_HOUR = (5, 11)  # (weekday (0 to 6), hour)
 
-CHANNEL_ID = 248493533537763328
+CHANNEL_ID = 1372252214814310651
 
 CATEGORIES_JSON_FILE_PATH = "./wikicategories.json"
 WIKI_CATEGORIES = {}
