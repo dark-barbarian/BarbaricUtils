@@ -77,7 +77,7 @@ async def check_wiki_page_errors():
                 else:
                     message += "error\n"
                 
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
             
             if error_counter > page_error_reminders.WIKI_CATEGORIES.get("allowed_errors", 0):
                 message += f"<@{bot.owner_id}>"
