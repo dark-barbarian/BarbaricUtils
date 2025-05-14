@@ -64,7 +64,7 @@ async def check_wiki_page_errors():
             if wiki == "allowed_errors":
                 continue
             
-            message = f"# Category report for {wiki} TODO: change back to (5,12) and change channel id\n"
+            message = f"# Category report for {wiki}\n"
             for category in categories:
                 logging.info(f"Checking category '{category}' on wiki '{wiki}'")
                 pages = page_error_reminders.fetch_category_members(wiki, category)
@@ -84,7 +84,8 @@ async def check_wiki_page_errors():
             
             if channel:
                 await channel.send(message)
-        
+
+        # TODO: auf local timezone umschreiben (server hat UTC)
         now = datetime.now(timezone.utc).astimezone()
         days_until = (page_error_reminders.CATEGORY_CHECK_DAY_HOUR[0] - now.weekday()) % 7
         target_time = (now + timedelta(days=days_until)).replace(hour=page_error_reminders.CATEGORY_CHECK_DAY_HOUR[1], minute=0, second=0, microsecond=0)
