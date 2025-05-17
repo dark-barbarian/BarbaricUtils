@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %
 ])
 
 bot = commands.Bot(owner_id=191530044491956224)
+local_tz = ZoneInfo("Europe/Berlin")
 
 ####################################################################
 ######################### GENERAL METHODS ##########################
@@ -84,9 +85,9 @@ async def check_wiki_page_errors():
                 message += f"<@{bot.owner_id}>"
             
             if channel:
-                await channel.send(message)
+                await channel.send(message) # type: ignore
 
-        now = datetime.now(ZoneInfo("Europe/Berlin"))
+        now = datetime.now(local_tz)
         days_until = (page_error_reminders.CATEGORY_CHECK_DAY_HOUR[0] - now.weekday()) % 7
         target_time = (now + timedelta(days=days_until)).replace(hour=page_error_reminders.CATEGORY_CHECK_DAY_HOUR[1], minute=0, second=0, microsecond=0)
         if now > target_time:
@@ -124,7 +125,7 @@ async def ping(ctx: discord.ApplicationContext):
 )
 @commands.is_owner()
 async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, module: str, wiki: str):
-    if not file.content_type.startswith("text/csv;"):
+    if file.content_type is None or not file.content_type.startswith("text/csv;"):
         await ctx.respond(embed=create_embed(description="The file you uploaded doesn't seem to be a CSV file.",
                                              color=0xFF0000), ephemeral=True)
         return
