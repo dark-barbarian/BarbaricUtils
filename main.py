@@ -1,9 +1,10 @@
 import asyncio
 import bisect
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import json
 import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import HTTPException, option
@@ -85,8 +86,7 @@ async def check_wiki_page_errors():
             if channel:
                 await channel.send(message)
 
-        # TODO: auf local timezone umschreiben (server hat UTC)
-        now = datetime.now(timezone.utc).astimezone()
+        now = datetime.now(ZoneInfo("Europe/Berlin"))
         days_until = (page_error_reminders.CATEGORY_CHECK_DAY_HOUR[0] - now.weekday()) % 7
         target_time = (now + timedelta(days=days_until)).replace(hour=page_error_reminders.CATEGORY_CHECK_DAY_HOUR[1], minute=0, second=0, microsecond=0)
         if now > target_time:
@@ -147,7 +147,7 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
         logging.error(f"Saving the attachment failed: {e}")
         return
 
-    # Todo: ins embed schreiben
+    # TODO: ins embed schreiben
     data, update_manually = clash_stats.update_wiki_stats(module, wiki)
     response = list(data.keys())[0]
     if response == 'edit' and data['edit']['result'] == 'Success':
@@ -334,5 +334,5 @@ async def on_ready():
 
 bot.run(config.DISCORD_TOKEN)
 
-#TODO: hash configs, create command for updating manual pages, instead of editing the txt itself, implement scheduling stuff,
-# output über manual pages als bot nachricht, nicht als log, list observed pages
+#TODO: hash configs, implement scheduling stuff (wiki+discord),
+# output über manual pages als bot nachricht und nicht als log, add command: list observed/manual pages

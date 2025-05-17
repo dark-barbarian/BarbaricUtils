@@ -3,7 +3,7 @@ import logging
 import requests
 
 
-CATEGORY_CHECK_DAY_HOUR = (5, 11)  # (weekday (0 to 6), hour)
+CATEGORY_CHECK_DAY_HOUR = (5, 12)  # (weekday (0 to 6), hour)
 
 CHANNEL_ID = 1372252214814310651
 
