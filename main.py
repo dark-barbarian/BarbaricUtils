@@ -1,9 +1,11 @@
 import asyncio
 import bisect
 from datetime import datetime, timedelta
+import io
 import json
 import logging
 from pathlib import Path
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import discord
@@ -85,7 +87,7 @@ async def check_wiki_page_errors():
                 message += f"<@{bot.owner_id}>"
             
             if channel:
-                await channel.send(message) # type: ignore
+                await cast(discord.TextChannel, channel).send(message)
 
         now = datetime.now(local_tz)
         days_until = (page_error_reminders.CATEGORY_CHECK_DAY_HOUR[0] - now.weekday()) % 7
@@ -148,10 +150,14 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
         logging.error(f"Saving the attachment failed: {e}")
         return
 
-    # TODO: ins embed schreiben
     data, update_manually = clash_stats.update_wiki_stats(module, wiki)
     response = list(data.keys())[0]
     if response == 'edit' and data['edit']['result'] == 'Success':
+        if len(update_manually):
+            output_file_data = io.BytesIO("\n".join(sorted(update_manually, key=str.lower)).encode("utf-8"))
+            output_file = discord.File(fp=output_file_data, filename="pages.txt")
+            await ctx.respond(embed=create_embed(description="Added the data successfully, but some pages need to be updated manually!", color=0x00FF00), file=output_file)
+            return
         await ctx.respond(embed=create_embed(description="Added the data successfully!", color=0x00FF00))
     elif response == 'error':
         await ctx.respond(embed=create_embed(description="Something went wrong!",
@@ -335,5 +341,4 @@ async def on_ready():
 
 bot.run(config.DISCORD_TOKEN)
 
-#TODO: hash configs, implement scheduling stuff (wiki+discord),
-# output über manual pages als bot nachricht und nicht als log, add command: list observed/manual pages
+#TODO: hash configs, implement scheduling stuff (wiki+discord), add command: list observed/manual pages

@@ -1,6 +1,7 @@
 import csv
 import logging
 import re
+from typing import Any, cast
 
 import discord
 import requests
@@ -46,7 +47,7 @@ async def autocomplete_page_observer_names(ctx: discord.AutocompleteContext):
     
     # pagination logic, if more than 25 entries
     if '▶' in ctx.value:  # if there is no '▶' we don't need to do the regex and can directly set 1 as page number
-        page_number = get_page_number(ctx.value)
+        page_number = get_page_number(ctx.value) or 1
     else:
         page_number = 1
         
@@ -87,7 +88,7 @@ def update_wiki_stats(page: str, wiki: str):
     update_manually = []
     current_key = ""
     
-    def flatten(xss: list[list[object]]):
+    def flatten(xss: list[list[Any]]):
         return [x for xs in xss for x in xs]
 
     for row in reader:
@@ -113,14 +114,12 @@ def update_wiki_stats(page: str, wiki: str):
 
     in_wiki_version = convert_from_lua(page, wiki)
 
-    for k, v in in_wiki_version.items():
+    for k, v in cast(dict, in_wiki_version).items():
         target = v['Name']
         result_key, result_value = find_dict_by_target(result, target)
         v_before = v.copy()
         update_values(v, result_value)
 
-        #TODO: send an actual discord message with all the pages included instead of just logging it
-        # there were changes to a page that has manually updated entries
         if (v_before != v) and (k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))):
             update_manually.append(k)
             logging.warning(f"Possibly manual update necessary: {k}")
@@ -130,7 +129,7 @@ def update_wiki_stats(page: str, wiki: str):
             del result[result_key]
 
     for k, v in result.items():
-        in_wiki_version[k] = v
+        cast(dict, in_wiki_version)[k] = v
 
     return wiki_operations.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki), update_manually
 
@@ -157,6 +156,6 @@ async def clash_info(name: str, stat: str, level: int, module: str):
     stats = convert_from_lua(module, wiki_operations.DEFAULT_WIKI)
 
     if level > 0:
-        return stats[name][stat][level - 1]
+        return cast(dict, stats)[name][stat][level - 1]
     else:
-        return stats[name][stat]
+        return cast(dict, stats)[name][stat]
