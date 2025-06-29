@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
+import hashlib
 import inspect
 import logging
 from typing import cast
@@ -14,19 +15,27 @@ from utils.bot_utils import create_embed, local_tz
 class Scheduling(commands.Cog):
     def __init__(self, bot):
         self.bot: commands.Bot = bot
+        self.scheduled_tasks: dict[str, asyncio.Task] = {}
     
-    async def schedule(self, what: Callable, when: datetime):
-        wait_seconds = (when - datetime.now(local_tz)).total_seconds()
-        if wait_seconds <= 0:
-            return False
-        
+    def get_wait_seconds(self, dt: datetime):
+        return (dt - datetime.now(local_tz)).total_seconds()
+    
+    async def schedule(self, what: Callable, wait_seconds: float):       
         await asyncio.sleep(wait_seconds)
         
         result = what()
         if inspect.isawaitable(result):
             await result
         
-        return True
+    def generate_task_id(self, message_id: int):
+        hash_obj = hashlib.sha256(str(message_id).encode())
+        hash_int = int(hash_obj.hexdigest(), 16)
+        return str(hash_int % 900000 + 100000)
+    
+    def delete_finished_tasks(self):
+        self.scheduled_tasks = {
+            k: t for k, t in self.scheduled_tasks.items() if not t.done()
+        }
     
     
     @commands.slash_command(
@@ -68,6 +77,11 @@ class Scheduling(commands.Cog):
             await ctx.respond(embed=create_embed(description="Please use the correct format for the date: `15.1. 14:20`", color=0xFF0000))
             return
         
+        wait_seconds = self.get_wait_seconds(dt)
+        if wait_seconds <= 0:
+            await ctx.respond(embed=create_embed(description="The date must be in the future.", color=0xFF0000))
+            return
+        
         if id:
             try:
                 to_schedule = await ctx.channel.fetch_message(int(id))
@@ -90,14 +104,14 @@ class Scheduling(commands.Cog):
         
         content: str = to_schedule.content
         files: list[discord.File] = await asyncio.gather(*(attachment.to_file() for attachment in to_schedule.attachments))
-        
-        print(f"Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{dt.timestamp()}:F>")
-        
+                
         async def send_scheduled_message():
             await cast(discord.TextChannel, channel).send(content, files=files)
+                
+        task: asyncio.Task = self.bot.loop.create_task(self.schedule(send_scheduled_message, wait_seconds))
         
-        task: asyncio.Task = self.bot.loop.create_task(self.schedule(send_scheduled_message, dt))
-        print(task)
+        self.scheduled_tasks[self.generate_task_id(to_schedule.id)] = self.bot.loop.create_task(self.schedule(send_scheduled_message, wait_seconds))
+
         #TODO: liste erstellen, die die tasks speichert. mit .done() (ist ein boolean) und cancel() tasks verwalten
         #     self.scheduled_tasks = [t for t in self.scheduled_tasks if not t.done()]
         #for task in self.scheduled_tasks:
