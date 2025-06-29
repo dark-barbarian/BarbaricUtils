@@ -107,7 +107,7 @@ class Scheduling(commands.Cog):
         #self.scheduled_tasks.clear()
         await ctx.respond(embed=create_embed(description=f"Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F>", color=0x00FF00))
         
-        #TODO: liste von planungen erstellen um sie bearbeiten oder canceln zu können
+        #TODO: liste von planungen erstellen um sie bearbeiten oder canceln zu können, und möglichkeit, direkt zu publishen nachm planen
     
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))
