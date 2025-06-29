@@ -17,7 +17,7 @@ class PageErrorReminders(commands.Cog):
     def __init__(self, bot):
         self.bot: commands.Bot = bot
         
-        self.channel_id = 248493533537763328 # 1372252214814310651
+        self.channel_id = 248493533537763328 # 1372252214814310651 <- clash wiki channel
         self.categories_json_file_path = "./wikicategories.json"
         
         self.category_check_day_hour = (5, 12)  # (weekday (0 to 6), hour)

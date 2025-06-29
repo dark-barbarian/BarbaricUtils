@@ -11,6 +11,7 @@ from discord.ext import commands
 
 from cogs import clash_stats
 from cogs.page_error_reminders import PageErrorReminders
+import config
 from utils import wiki_operations
 from utils.bot_utils import create_embed
 
@@ -261,13 +262,15 @@ async def on_ready():
 
 
 cogs_list = [
+    #TODO: clash_stats in Klasse umwandeln und setup funktion geben
     #'clash_stats',
-    'page_error_reminders'
+    'page_error_reminders',
+    'scheduling'
 ]
 
 for cog in cogs_list:
     bot.load_extension(f"cogs.{cog}")
 
-#bot.run(config.DISCORD_TOKEN)
+bot.run(config.DISCORD_TOKEN)
 
 #TODO: implement scheduling stuff (wiki+discord), add command: list observed/manual pages
