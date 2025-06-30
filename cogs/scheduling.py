@@ -3,7 +3,9 @@ from collections.abc import Callable
 from datetime import datetime
 import hashlib
 import inspect
+import json
 import logging
+import os
 from typing import cast
 from discord import option
 import discord
@@ -16,26 +18,57 @@ class Scheduling(commands.Cog):
     def __init__(self, bot):
         self.bot: commands.Bot = bot
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
+        
+        self.scheduled_posts_file_path = "./scheduled_posts.json"
+        os.makedirs("attachments", exist_ok=True)
     
     def get_wait_seconds(self, dt: datetime):
         return (dt - datetime.now(local_tz)).total_seconds()
     
-    async def schedule(self, what: Callable, wait_seconds: float):       
+    async def schedule(self, what: Callable, wait_seconds: float, *args):       
         await asyncio.sleep(wait_seconds)
         
-        result = what()
+        result = what(*args)
         if inspect.isawaitable(result):
             await result
+    
+    async def send_scheduled_message(self, scheduled_posts, task_id, channel, content, files, publish):
+        message = await cast(discord.TextChannel, channel).send(content, files=files)
+        if publish:
+            await message.publish()
         
-    def generate_task_id(self, message_id: int):
-        hash_obj = hashlib.sha256(str(message_id).encode())
-        hash_int = int(hash_obj.hexdigest(), 16)
-        return str(hash_int % 900000 + 100000)
+        scheduled_posts = [post for post in scheduled_posts if post["task_id"] != task_id]
+        
+        try:
+            with open(self.scheduled_posts_file_path, 'w') as file:
+                json.dump(scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store scheduled post to file: {e}")
+    
+    def load_scheduled_posts(self, posts: list):
+        for post in posts:
+            wait_seconds = self.get_wait_seconds(datetime.fromisoformat(post["post_time"]))
+            if wait_seconds <= 0:
+                continue
+            
+            self.scheduled_tasks[post["id"]] = self.bot.loop.create_task(self.schedule(
+                self.send_scheduled_message,
+                wait_seconds,
+                posts,
+                post["id"],
+                self.bot.get_channel(post["channel_id"]),
+                post["content"],
+                [discord.File(path) for path in post["attachments"] if os.path.exists(path)],
+                post["publish"]))
     
     def delete_finished_tasks(self):
         self.scheduled_tasks = {
             k: t for k, t in self.scheduled_tasks.items() if not t.done()
         }
+    
+    def cancel_all_tasks(self):
+        for _, task in self.scheduled_tasks.items():
+            task.cancel()
     
     
     @commands.slash_command(
@@ -60,7 +93,15 @@ class Scheduling(commands.Cog):
         input_type=str,
         required=False
     )
-    async def schedule_post(self, ctx: discord.ApplicationContext, channel: discord.abc.GuildChannel, date: str, id: str):
+    @option(
+        "publish",
+        description="Whether or not to publish the message after it was posted",
+        input_type=bool,
+        required=False
+    )
+    async def schedule_post(self, ctx: discord.ApplicationContext, channel: discord.abc.GuildChannel, date: str, id: str, publish: bool):
+        self.delete_finished_tasks()
+        
         to_schedule = None
         
         try:
@@ -102,26 +143,62 @@ class Scheduling(commands.Cog):
                 await ctx.respond(embed=create_embed(description="Failed to fetch your message automatically, please provide the message id.", color=0xFF0000))
                 return
         
+        scheduled_posts = []
+        try:
+            if os.path.exists(self.scheduled_posts_file_path):
+                with open(self.scheduled_posts_file_path, 'r') as file:
+                    scheduled_posts = json.load(file)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Error when reading {self.scheduled_posts_file_path}: {e}")
+        
+        task_id = str(int(now.timestamp()))[-6:]
+        while task_id in self.scheduled_tasks:
+            task_id = str(int(task_id) + 1)
+        
         content: str = to_schedule.content
         files: list[discord.File] = await asyncio.gather(*(attachment.to_file() for attachment in to_schedule.attachments))
-                
-        async def send_scheduled_message():
-            await cast(discord.TextChannel, channel).send(content, files=files)
-                
-        task: asyncio.Task = self.bot.loop.create_task(self.schedule(send_scheduled_message, wait_seconds))
+            
+        self.scheduled_tasks[task_id] = self.bot.loop.create_task(self.schedule(
+            self.send_scheduled_message, wait_seconds, scheduled_posts, task_id, channel, content, files, publish))
         
-        self.scheduled_tasks[self.generate_task_id(to_schedule.id)] = self.bot.loop.create_task(self.schedule(send_scheduled_message, wait_seconds))
-
-        #TODO: liste erstellen, die die tasks speichert. mit .done() (ist ein boolean) und cancel() tasks verwalten
-        #     self.scheduled_tasks = [t for t in self.scheduled_tasks if not t.done()]
-        #for task in self.scheduled_tasks:
-        #    if not task.done():
-        #        task.cancel()
-
-        #self.scheduled_tasks.clear()
-        await ctx.respond(embed=create_embed(description=f"Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F>", color=0x00FF00))
+        attachment_paths = []
+        for i, attachment in enumerate(cast(discord.Message, to_schedule).attachments):
+            filename = f"attachments/{task_id}_{i}_{attachment.filename}"
+            await attachment.save(filename) # type: ignore
+            attachment_paths.append(filename)
         
-        #TODO: liste von planungen erstellen um sie bearbeiten oder canceln zu können, und möglichkeit, direkt zu publishen nachm planen
+        scheduled_posts.append({
+            "id": task_id,
+            "channel_id": channel.id,
+            "content": content,
+            "post_time": dt.isoformat(),
+            "attachments": attachment_paths,
+            "publish": publish
+        })
+        
+        try:
+            with open(self.scheduled_posts_file_path, 'w') as file:
+                json.dump(scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store scheduled post to file: {e}")
+        
+        await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F>", color=0x00FF00))
+    
+    #TODO
+    @commands.slash_command(
+        name="list_scheduled_posts",
+        description=""
+    )
+    
+    @commands.slash_command(
+        name="modify_scheduled_post",
+        description=""
+    )
+    
+    @commands.slash_command(
+        name="delete_scheduled_post",
+        description=""
+    )
     
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))

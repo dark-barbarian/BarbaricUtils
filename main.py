@@ -1,7 +1,9 @@
+import atexit
 import bisect
 import io
 import json
 import logging
+import os
 from pathlib import Path
 from typing import cast
 
@@ -11,6 +13,7 @@ from discord.ext import commands
 
 from cogs import clash_stats
 from cogs.page_error_reminders import PageErrorReminders
+from cogs.scheduling import Scheduling
 import config
 from utils import wiki_operations
 from utils.bot_utils import create_embed
@@ -239,24 +242,33 @@ async def remove_observable_page(ctx: discord.ApplicationContext, name: str):
 @bot.listen(once=True)
 async def on_ready():
     page_error_reminders = cast(PageErrorReminders, bot.get_cog("PageErrorReminders"))
+    scheduling = cast(Scheduling, bot.get_cog("Scheduling"))
         
     # initialize json files
     try:
-        with open(clash_stats.MODULE_LIST_FILE_PATH, 'r') as file:
-            clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(sorted(json.load(file), key=str.lower)))
+        if os.path.exists(clash_stats.MODULE_LIST_FILE_PATH):
+            with open(clash_stats.MODULE_LIST_FILE_PATH, 'r') as file:
+                clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(sorted(json.load(file), key=str.lower)))
         
-        with open(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH, 'r') as file:
-            data = json.load(file)
-            sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
-            sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
-            clash_stats.PAGES_WITH_MANUAL_ENTRIES = sorted_data
+        if os.path.exists(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH):
+            with open(clash_stats.OBSERVABLE_PAGES_LIST_FILE_PATH, 'r') as file:
+                data = json.load(file)
+                sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
+                sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
+                clash_stats.PAGES_WITH_MANUAL_ENTRIES = sorted_data
         
-        with open(page_error_reminders.categories_json_file_path, 'r') as file:
-            page_error_reminders.wiki_categories = json.load(file)
+        if os.path.exists(page_error_reminders.categories_json_file_path):
+            with open(page_error_reminders.categories_json_file_path, 'r') as file:
+                page_error_reminders.wiki_categories = json.load(file)
+        
+        if os.path.exists(scheduling.scheduled_posts_file_path):
+            with open(scheduling.scheduled_posts_file_path, 'r') as file:
+                scheduling.load_scheduled_posts(json.load(file))
     except (OSError, json.JSONDecodeError) as e:
         logging.error(f"Error when reading and initializing json files: {e}")
-        pass
 
+    atexit.register(scheduling.cancel_all_tasks)
+    
     logging.info(f'Logged in as {bot.user}')
     #bot.loop.create_task(page_error_reminders.check_wiki_page_errors())
 
