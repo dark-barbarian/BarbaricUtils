@@ -3,3 +3,4 @@ venv/
 barbaricutils.log
 stats.csv
 __pycache__/
+scheduled_posts.json
