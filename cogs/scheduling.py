@@ -33,11 +33,18 @@ class Scheduling(commands.Cog):
             await result
     
     async def send_scheduled_message(self, task_id, channel, content, files, publish):
+        files = [discord.File(path) for path in files if os.path.exists(path)]
         message = await cast(discord.TextChannel, channel).send(content, files=files)
         if publish:
             await message.publish()
         
         self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != task_id]
+
+        for file in files:
+            try:
+                os.remove("attachments/" + file.filename)
+            except Exception as e:
+                logging.error(f"Failed to delete file: {e}")
         
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
@@ -57,7 +64,7 @@ class Scheduling(commands.Cog):
                 post["id"],
                 self.bot.get_channel(post["channel_id"]),
                 post["content"],
-                [discord.File(path) for path in post["attachments"] if os.path.exists(path)],
+                post["attachments"],
                 post["publish"]))
             
             self.scheduled_posts.append(post)
@@ -73,6 +80,13 @@ class Scheduling(commands.Cog):
     def cancel_all_tasks(self):
         for _, task in self.scheduled_tasks.items():
             task.cancel()
+        
+        for post in self.scheduled_posts:
+            for path in post["attachments"]:
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    logging.error(f"Failed to delete file: {e}")
     
     
     @commands.slash_command(
@@ -152,10 +166,6 @@ class Scheduling(commands.Cog):
             task_id = str(int(task_id) + 1)
         
         content: str = to_schedule.content
-        files: list[discord.File] = await asyncio.gather(*(attachment.to_file() for attachment in to_schedule.attachments))
-            
-        self.scheduled_tasks[task_id] = self.bot.loop.create_task(self.schedule(
-            self.send_scheduled_message, wait_seconds, task_id, channel, content, files, publish))
         
         attachment_paths = []
         for i, attachment in enumerate(cast(discord.Message, to_schedule).attachments):
@@ -173,6 +183,9 @@ class Scheduling(commands.Cog):
             "attachments": attachment_paths,
             "publish": publish
         })
+
+        self.scheduled_tasks[task_id] = self.bot.loop.create_task(self.schedule(
+            self.send_scheduled_message, wait_seconds, task_id, channel, content, attachment_paths, publish))
         
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
@@ -291,7 +304,7 @@ class Scheduling(commands.Cog):
             id,
             channel or self.bot.get_channel(post["channel_id"]),
             post["content"],
-            [discord.File(path) for path in post["attachments"] if os.path.exists(path)],
+            post["attachments"],
             post["publish"]))
         
         try:
@@ -321,6 +334,13 @@ class Scheduling(commands.Cog):
         self.scheduled_tasks[id].cancel()
         self.delete_finished_tasks()
 
- #TODO: delete files afterwards
+        for path in post["attachments"]:
+            try:
+                os.remove(path)
+            except Exception as e:
+                logging.error(f"Failed to delete file: {e}")
+
+        await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
+
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))
