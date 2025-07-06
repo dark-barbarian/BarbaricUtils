@@ -270,7 +270,7 @@ async def on_ready():
     atexit.register(scheduling.cancel_all_tasks)
     
     logging.info(f'Logged in as {bot.user}')
-    #bot.loop.create_task(page_error_reminders.check_wiki_page_errors())
+    bot.loop.create_task(page_error_reminders.check_wiki_page_errors())
 
 
 cogs_list = [
@@ -285,4 +285,4 @@ for cog in cogs_list:
 
 bot.run(config.DISCORD_TOKEN)
 
-#TODO: implement scheduling stuff (wiki+discord), add command: list observed/manual pages
+#TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
