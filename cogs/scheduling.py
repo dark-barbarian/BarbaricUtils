@@ -208,7 +208,7 @@ class Scheduling(commands.Cog):
         for post in self.scheduled_posts:
             if ctx.guild_id != post["guild_id"]:
                 continue
-            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F>\n"
+            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>\n"
 
         local_posts = [post for post in self.scheduled_posts if post["guild_id"] == ctx.guild_id]
         if len(local_posts) == 0:
