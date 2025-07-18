@@ -42,7 +42,7 @@ class Scheduling(commands.Cog):
 
         for file in files:
             try:
-                os.remove("attachments/" + file.filename)
+                os.remove("attachments/" + file.filename) # type: ignore
             except Exception as e:
                 logging.error(f"Failed to delete file: {e}")
         
@@ -115,7 +115,8 @@ class Scheduling(commands.Cog):
         "publish",
         description="Whether or not to publish the message after it was posted",
         input_type=bool,
-        required=False
+        required=False,
+        default=False
     )
     async def schedule_post(self, ctx: discord.ApplicationContext, channel: discord.abc.GuildChannel, date: str, id: str, publish: bool):
         self.delete_finished_tasks()
