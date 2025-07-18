@@ -38,6 +38,14 @@ class PageErrorReminders(commands.Cog):
                 return
         
         while True:
+            now = datetime.now(local_tz)
+            days_until = (self.category_check_day_hour[0] - now.weekday()) % 7
+            target_time = (now + timedelta(days=days_until)).replace(hour=self.category_check_day_hour[1], minute=0, second=0, microsecond=0)
+            if now > target_time:
+                target_time += timedelta(weeks=1)
+            
+            await asyncio.sleep((target_time - now).total_seconds())
+            
             error_counter = 0
             for wiki, categories in self.wiki_categories.items():
                 if wiki == "allowed_errors":
@@ -63,14 +71,6 @@ class PageErrorReminders(commands.Cog):
                 
                 if channel:
                     await cast(discord.TextChannel, channel).send(message)
-
-            now = datetime.now(local_tz)
-            days_until = (self.category_check_day_hour[0] - now.weekday()) % 7
-            target_time = (now + timedelta(days=days_until)).replace(hour=self.category_check_day_hour[1], minute=0, second=0, microsecond=0)
-            if now > target_time:
-                target_time += timedelta(weeks=1)
-            
-            await asyncio.sleep((target_time - now).total_seconds())
 
     def fetch_categories(self, wiki: str, page_title: str):
         url = f"https://{wiki}/api.php"
