@@ -178,6 +178,7 @@ class Scheduling(commands.Cog):
             "guild_id": ctx.guild_id,
             "channel_id": channel.id,
             "message_id": to_schedule.id,
+            "channel_id_source": ctx.channel_id,
             "content": content,
             "post_time": dt.isoformat(),
             "attachments": attachment_paths,
@@ -193,7 +194,7 @@ class Scheduling(commands.Cog):
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to store scheduled post to file: {e}")
         
-        await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F>", color=0x00FF00))
+        await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F> in <#{channel.id}>", color=0x00FF00))
     
     
     #TODO: handle too many scheduled posts
@@ -204,9 +205,12 @@ class Scheduling(commands.Cog):
     async def list_scheduled_posts(self, ctx: discord.ApplicationContext):
         response = ""
         for post in self.scheduled_posts:
-            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F>\n"
-        
-        if len(self.scheduled_posts) == 0:
+            if ctx.guild_id != post["guild_id"]:
+                continue
+            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F>\n"
+
+        local_posts = [post for post in self.scheduled_posts if post["guild_id"] == ctx.guild_id]
+        if len(local_posts) == 0:
             await ctx.respond(embed=create_embed(description="No posts have been scheduled."))
         else:
             await ctx.respond(embed=create_embed(description=response))
@@ -288,7 +292,9 @@ class Scheduling(commands.Cog):
                 filename = f"attachments/{id}_{i}_{attachment.filename}"
                 await attachment.save(filename) # type: ignore
                 attachment_paths.append(filename)
-            
+
+            post["message_id"] = int(message_id)
+            post["channel_id_source"] = ctx.channel_id
             post["content"] = message.content
             post["attachments"] = attachment_paths
         
@@ -312,6 +318,8 @@ class Scheduling(commands.Cog):
                 json.dump(self.scheduled_posts, file, indent=4)
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to store scheduled post to file: {e}")
+
+        await ctx.respond(embed=create_embed(description=f"`{post["id"]}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{post["channel_id_source"]}/{post["message_id"]} for <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>", color=0x00FF00))
         
     
     @commands.slash_command(
@@ -339,6 +347,12 @@ class Scheduling(commands.Cog):
                 os.remove(path)
             except Exception as e:
                 logging.error(f"Failed to delete file: {e}")
+
+        try:
+            with open(self.scheduled_posts_file_path, 'w') as file:
+                json.dump(self.scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to delete post from file: {e}")
 
         await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
 
