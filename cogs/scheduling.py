@@ -287,7 +287,7 @@ class Scheduling(commands.Cog):
             post["channel_id"] = channel.id
         
         if message_id:     
-            message = await ctx.channel().fetch_message(int(message_id))       
+            message = await ctx.channel.fetch_message(int(message_id))       
             attachment_paths = []
             for i, attachment in enumerate(message.attachments):
                 filename = f"attachments/{id}_{i}_{attachment.filename}"
