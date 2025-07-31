@@ -56,6 +56,7 @@ class Scheduling(commands.Cog):
         for post in posts:
             wait_seconds = self.get_wait_seconds(datetime.fromisoformat(post["post_time"]))
             if wait_seconds <= 0:
+                logging.info(f"Trying to schedule {post['id']} failed: Due date is in the past.")
                 continue
             
             self.scheduled_tasks[post["id"]] = self.bot.loop.create_task(self.schedule(
@@ -68,6 +69,14 @@ class Scheduling(commands.Cog):
                 post["publish"]))
             
             self.scheduled_posts.append(post)
+
+            logging.info(f"Scheduled {post['info']} on {datetime.fromisoformat(post['post_time'])}")
+
+        try:
+            with open(self.scheduled_posts_file_path, 'w') as file:
+                json.dump(self.scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store scheduled post to file: {e}")
     
     def get_post_by_id(self, id: str):
         return next((d for d in self.scheduled_posts if d["id"] == id), None)
