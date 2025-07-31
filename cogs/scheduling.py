@@ -70,7 +70,7 @@ class Scheduling(commands.Cog):
             
             self.scheduled_posts.append(post)
 
-            logging.info(f"Scheduled {post['info']} on {datetime.fromisoformat(post['post_time'])}")
+            logging.info(f"Scheduled {post['id']} on {datetime.fromisoformat(post['post_time'])}")
 
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
