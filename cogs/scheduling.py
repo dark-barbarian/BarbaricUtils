@@ -171,7 +171,7 @@ class Scheduling(commands.Cog):
                 await ctx.respond(embed=create_embed(description="Failed to fetch your message automatically, please provide the message id.", color=0xFF0000))
                 return
         
-        task_id = str(int(now.timestamp()))[:-7:-1]
+        task_id = f"{now.timestamp():.6f}".split(".")[1]
         while task_id in self.scheduled_tasks:
             task_id = str(int(task_id) + 1)
         
@@ -204,7 +204,7 @@ class Scheduling(commands.Cog):
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to store scheduled post to file: {e}")
         
-        await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F> in <#{channel.id}>", color=0x00FF00))
+        await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F> in <#{channel.id}>{' (\u2060:mega:\u2060)' if publish else ''}", color=0x00FF00))
     
     
     #TODO: handle too many scheduled posts
@@ -217,7 +217,7 @@ class Scheduling(commands.Cog):
         for post in self.scheduled_posts:
             if ctx.guild_id != post["guild_id"]:
                 continue
-            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>\n"
+            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>{' (\u2060:mega:\u2060)' if post["publish"] else ''}\n"
 
         local_posts = [post for post in self.scheduled_posts if post["guild_id"] == ctx.guild_id]
         if len(local_posts) == 0:
@@ -329,7 +329,7 @@ class Scheduling(commands.Cog):
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to store scheduled post to file: {e}")
 
-        await ctx.respond(embed=create_embed(description=f"`{post["id"]}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{post["channel_id_source"]}/{post["message_id"]} for <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>", color=0x00FF00))
+        await ctx.respond(embed=create_embed(description=f"`{post["id"]}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{post["channel_id_source"]}/{post["message_id"]} for <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>{' (\u2060:mega:\u2060)' if post["publish"] else ''}", color=0x00FF00))
         
     
     @commands.slash_command(
