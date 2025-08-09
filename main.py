@@ -1,3 +1,4 @@
+import asyncio
 import atexit
 import bisect
 import io
@@ -10,6 +11,7 @@ from typing import cast
 import discord
 from discord import HTTPException, option
 from discord.ext import commands
+import psutil
 
 from cogs import clash_stats
 from cogs.page_error_reminders import PageErrorReminders
@@ -24,6 +26,8 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %
 ])
 
 bot = commands.Bot(owner_id=191530044491956224)
+MEMORY_CHANNEL_ID = 1403711339355963443
+MEMORY_INTERVAL = 60 * 60 * 6
 
 ####################################################################
 ######################### GENERAL METHODS ##########################
@@ -43,6 +47,18 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
     else:
         logging.error(error)
         raise error
+
+async def memory_reporter():
+    await bot.wait_until_ready()
+    channel = bot.get_channel(MEMORY_CHANNEL_ID)
+    process = psutil.Process(os.getpid())
+
+    while not bot.is_closed():
+        mem_mb = process.memory_info().rss / 1024 / 1024
+        total_mb = psutil.virtual_memory().total / 1024 / 1024
+        cpu_percent = process.cpu_percent(interval=None)
+        await cast(discord.TextChannel, channel).send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
+        await asyncio.sleep(MEMORY_INTERVAL)
         
 
 ####################################################################
@@ -271,6 +287,7 @@ async def on_ready():
     
     logging.info(f'Logged in as {bot.user}')
     bot.loop.create_task(page_error_reminders.check_wiki_page_errors())
+    bot.loop.create_task(memory_reporter())
 
 
 cogs_list = [
