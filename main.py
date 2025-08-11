@@ -1,6 +1,6 @@
-import asyncio
 import atexit
 import bisect
+from datetime import time
 import io
 import json
 import logging
@@ -10,7 +10,7 @@ from typing import cast
 
 import discord
 from discord import HTTPException, option
-from discord.ext import commands
+from discord.ext import commands, tasks
 import psutil
 
 from cogs import clash_stats
@@ -18,7 +18,7 @@ from cogs.page_error_reminders import PageErrorReminders
 from cogs.scheduling import Scheduling
 import config
 from utils import wiki_operations
-from utils.bot_utils import create_embed
+from utils.bot_utils import create_embed, local_tz
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %(message)s', handlers=[
     logging.FileHandler('barbaricutils.log'),
@@ -26,12 +26,13 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %
 ])
 
 bot = commands.Bot(owner_id=191530044491956224)
-MEMORY_CHANNEL_ID = 1403711339355963443
-MEMORY_INTERVAL = 60 * 60 * 6
 
 ####################################################################
 ######################### GENERAL METHODS ##########################
 ####################################################################
+
+MEMORY_CHANNEL_ID = 1403711339355963443
+MEMORY_INTERVAL_HOURS = 6  # must be 0 < h <= 24
 
 # TODO: convert to reaction emojis
 async def cancel(ctx: discord.ApplicationContext, content: str):
@@ -48,17 +49,17 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
         logging.error(error)
         raise error
 
-async def memory_reporter():
-    await bot.wait_until_ready()
-    channel = bot.get_channel(MEMORY_CHANNEL_ID)
-    process = psutil.Process(os.getpid())
-
-    while not bot.is_closed():
-        mem_mb = process.memory_info().rss / 1024 / 1024
-        total_mb = psutil.virtual_memory().total / 1024 / 1024
-        cpu_percent = process.cpu_percent(interval=None)
-        await cast(discord.TextChannel, channel).send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
-        await asyncio.sleep(MEMORY_INTERVAL)
+@tasks.loop(
+    time=tuple(
+        time(hour=(i * MEMORY_INTERVAL_HOURS) % 24, tzinfo=local_tz)
+        for i in range(24 // MEMORY_INTERVAL_HOURS)
+    )
+)
+async def memory_reporter(channel: discord.TextChannel, process: psutil.Process):
+    mem_mb = process.memory_info().rss / 1024 / 1024
+    total_mb = psutil.virtual_memory().total / 1024 / 1024
+    cpu_percent = process.cpu_percent(interval=None)
+    await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
         
 
 ####################################################################
@@ -286,8 +287,8 @@ async def on_ready():
     atexit.register(scheduling.cancel_all_tasks)
     
     logging.info(f'Logged in as {bot.user}')
-    bot.loop.create_task(page_error_reminders.check_wiki_page_errors())
-    bot.loop.create_task(memory_reporter())
+    page_error_reminders.check_wiki_page_errors.start()
+    memory_reporter.start(bot.get_channel(MEMORY_CHANNEL_ID), psutil.Process(os.getpid()))
 
 
 cogs_list = [
