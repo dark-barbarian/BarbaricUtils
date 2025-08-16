@@ -59,7 +59,8 @@ async def memory_reporter(channel: discord.TextChannel, process: psutil.Process)
     mem_mb = process.memory_info().rss / 1024 / 1024
     total_mb = psutil.virtual_memory().total / 1024 / 1024
     cpu_percent = process.cpu_percent(interval=None)
-    await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
+    if channel:
+        await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
         
 
 ####################################################################
@@ -287,7 +288,7 @@ async def on_ready():
     atexit.register(scheduling.cancel_all_tasks)
     
     logging.info(f'Logged in as {bot.user}')
-    page_error_reminders.check_wiki_page_errors.start()
+    page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
     memory_reporter.start(bot.get_channel(MEMORY_CHANNEL_ID), psutil.Process(os.getpid()))
 
 

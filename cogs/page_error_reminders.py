@@ -2,7 +2,6 @@ import asyncio
 from datetime import datetime, time
 import json
 import logging
-from typing import cast
 
 import discord
 from discord import option
@@ -16,13 +15,13 @@ class PageErrorReminders(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         
-        self.channel_id = 1372252214814310651 # 248493533537763328
-        self.channel = bot.get_channel(self.channel_id)
+        self.channel_id = 1372252214814310651  # Clash of Clans Wiki -> #wiki-category-report
+        #self.channel_id = 836247026118295642  # barbs tests -> #bot
         self.categories_json_file_path = "./wikicategories.json"
         self.wiki_categories = {}
     
     @tasks.loop(time=time(hour=12, tzinfo=local_tz))
-    async def check_wiki_page_errors(self):
+    async def check_wiki_page_errors(self, channel: discord.TextChannel):
         if (datetime.now(local_tz).weekday() != 5):
             return
         
@@ -58,8 +57,8 @@ class PageErrorReminders(commands.Cog):
             if error_counter > self.wiki_categories.get("allowed_errors", 0):
                 message += f"<@{self.bot.owner_id}>"
             
-            if self.channel:
-                await cast(discord.TextChannel, self.channel).send(message)
+            if channel:
+                await channel.send(message)
 
     def fetch_categories(self, wiki: str, page_title: str):
         url = f"https://{wiki}/api.php"
