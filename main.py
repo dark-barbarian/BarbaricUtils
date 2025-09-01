@@ -31,7 +31,7 @@ bot = commands.Bot(owner_id=191530044491956224)
 ######################### GENERAL METHODS ##########################
 ####################################################################
 
-MEMORY_CHANNEL_ID = 1403711339355963443
+BOT_REPORTS_CHANNEL_ID = 1403711339355963443
 MEMORY_INTERVAL_HOURS = 6  # must be 0 < h <= 24
 
 # TODO: convert to reaction emojis
@@ -289,10 +289,10 @@ async def on_ready():
     
     logging.info(f'Logged in as {bot.user}')
     page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
-    memory_reporter.start(bot.get_channel(MEMORY_CHANNEL_ID), psutil.Process(os.getpid()))
+    memory_reporter.start(bot.get_channel(BOT_REPORTS_CHANNEL_ID), psutil.Process(os.getpid()))
     
     await bot.wait_until_ready()
-    await cast(discord.TextChannel, bot.get_channel(MEMORY_CHANNEL_ID)).send(":arrows_counterclockwise: Finished restarting!")
+    await cast(discord.TextChannel, bot.get_channel(BOT_REPORTS_CHANNEL_ID)).send(":arrows_counterclockwise: Finished restarting!")
 
 
 cogs_list = [
