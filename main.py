@@ -290,6 +290,9 @@ async def on_ready():
     logging.info(f'Logged in as {bot.user}')
     page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
     memory_reporter.start(bot.get_channel(MEMORY_CHANNEL_ID), psutil.Process(os.getpid()))
+    
+    await bot.wait_until_ready()
+    await cast(discord.TextChannel, bot.get_channel(MEMORY_CHANNEL_ID)).send(":arrows_counterclockwise: Finished restarting!")
 
 
 cogs_list = [

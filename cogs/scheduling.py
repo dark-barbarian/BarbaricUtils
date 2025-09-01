@@ -25,9 +25,10 @@ class Scheduling(commands.Cog):
     def get_wait_seconds(self, dt: datetime):
         return (dt - datetime.now(local_tz)).total_seconds()
     
-    async def schedule(self, what: Callable, wait_seconds: float, *args):       
+    async def schedule(self, what: Callable, wait_seconds: float, *args):
         await asyncio.sleep(wait_seconds)
         
+        logging.info(f"Finished waiting, posting {args[0]} now.")
         result = what(*args)
         if inspect.isawaitable(result):
             await result
@@ -89,13 +90,6 @@ class Scheduling(commands.Cog):
     def cancel_all_tasks(self):
         for _, task in self.scheduled_tasks.items():
             task.cancel()
-        
-        for post in self.scheduled_posts:
-            for path in post["attachments"]:
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    logging.error(f"Failed to delete file: {e}")
     
     
     @commands.slash_command(
