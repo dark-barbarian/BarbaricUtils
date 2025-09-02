@@ -5,12 +5,12 @@ import inspect
 import json
 import logging
 import os
-from typing import cast
+from typing import Any, Coroutine, cast
 from discord import option
 import discord
 from discord.ext import commands
 
-from utils.bot_utils import create_embed, local_tz
+from utils.bot_utils import create_embed, create_task_with_logging, local_tz
 
 
 class Scheduling(commands.Cog):
@@ -25,33 +25,19 @@ class Scheduling(commands.Cog):
     def get_wait_seconds(self, dt: datetime):
         return (dt - datetime.now(local_tz)).total_seconds()
     
-    async def schedule(self, what: Callable, wait_seconds: float, *args):
+    async def schedule(self, what: Callable[..., Coroutine[Any, Any, None] | None], wait_seconds: float, id: str, *args):
         await asyncio.sleep(wait_seconds)
         
-        logging.info(f"Finished waiting, posting {args[0]} now.")
+        logging.info(f"Finished waiting, posting {id} now.")
         result = what(*args)
         if inspect.isawaitable(result):
             await result
     
-    async def send_scheduled_message(self, task_id, channel, content, files, publish):
-        files = [discord.File(path) for path in files if os.path.exists(path)]
-        message = await cast(discord.TextChannel, channel).send(content, files=files)
+    async def send_scheduled_message(self, channel: discord.TextChannel, content: str, file_paths: list[str], publish: bool):
+        files = [discord.File(path) for path in file_paths if os.path.exists(path)]
+        message = await channel.send(content, files=files)
         if publish:
             await message.publish()
-        
-        self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != task_id]
-
-        for file in files:
-            try:
-                os.remove("attachments/" + file.filename) # type: ignore
-            except Exception as e:
-                logging.error(f"Failed to delete file: {e}")
-        
-        try:
-            with open(self.scheduled_posts_file_path, 'w') as file:
-                json.dump(self.scheduled_posts, file, indent=4)
-        except (OSError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to store scheduled post to file: {e}")
     
     def load_scheduled_posts(self, posts: list):
         for post in posts:
@@ -60,18 +46,18 @@ class Scheduling(commands.Cog):
                 logging.info(f"Trying to schedule {post['id']} failed: Due date is in the past.")
                 continue
             
-            self.scheduled_tasks[post["id"]] = self.bot.loop.create_task(self.schedule(
-                self.send_scheduled_message,
-                wait_seconds,
-                post["id"],
-                self.bot.get_channel(post["channel_id"]),
-                post["content"],
-                post["attachments"],
-                post["publish"]))
+            self.scheduled_tasks[post["id"]] = self.create_schedule_task(
+                wait_seconds=wait_seconds,
+                task_id=post["id"],
+                channel=self.bot.get_channel(post["channel_id"]),
+                content=post["content"],
+                attachments=post["attachments"],
+                publish=post["publish"]
+                )
             
             self.scheduled_posts.append(post)
 
-            logging.info(f"Scheduled {post['id']} on {datetime.fromisoformat(post['post_time'])}")
+            logging.info(f"Scheduled {post['id']} for {post['post_time']}")
 
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
@@ -81,6 +67,20 @@ class Scheduling(commands.Cog):
     
     def get_post_by_id(self, id: str):
         return next((d for d in self.scheduled_posts if d["id"] == id), None)
+    
+    def create_schedule_task(self, **kwargs):
+        task = create_task_with_logging(self.bot.loop, self.schedule(
+            self.send_scheduled_message,
+            kwargs["wait_seconds"],
+            kwargs["task_id"],
+            kwargs["channel"],
+            kwargs["content"],
+            kwargs["attachments"],
+            kwargs["publish"]))
+        
+        task.add_done_callback(lambda _: self.cleanup_schedule_remains(kwargs["task_id"], kwargs["attachments"]))
+        
+        return task
         
     def delete_finished_tasks(self):
         self.scheduled_tasks = {
@@ -90,6 +90,22 @@ class Scheduling(commands.Cog):
     def cancel_all_tasks(self):
         for _, task in self.scheduled_tasks.items():
             task.cancel()
+    
+    def cleanup_schedule_remains(self, task_id: str, file_paths: list[str]):
+        self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != task_id]
+        self.delete_finished_tasks()
+
+        for path in file_paths:
+            try:
+                os.remove(path)
+            except Exception as e:
+                logging.error(f"Failed to delete file: {e}")
+        
+        try:
+            with open(self.scheduled_posts_file_path, 'w') as file:
+                json.dump(self.scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to delete post from file: {e}")
     
     
     @commands.slash_command(
@@ -189,8 +205,14 @@ class Scheduling(commands.Cog):
             "publish": publish
         })
 
-        self.scheduled_tasks[task_id] = self.bot.loop.create_task(self.schedule(
-            self.send_scheduled_message, wait_seconds, task_id, channel, content, attachment_paths, publish))
+        self.scheduled_tasks[task_id] = self.create_schedule_task(
+            wait_seconds=wait_seconds,
+            task_id=task_id,
+            channel=channel,
+            content=content,
+            attachments=attachment_paths,
+            publish=publish
+            )
         
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
@@ -198,6 +220,7 @@ class Scheduling(commands.Cog):
         except (OSError, json.JSONDecodeError) as e:
             logging.error(f"Failed to store scheduled post to file: {e}")
         
+        logging.info(f"Scheduled {task_id} for {dt.isoformat()}")
         await ctx.respond(embed=create_embed(description=f"`{task_id}`: Scheduled https://discord.com/channels/{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for <t:{int(dt.timestamp())}:F> in <#{channel.id}>{' (\u2060:mega:\u2060)' if publish else ''}", color=0x00FF00))
     
     
@@ -308,14 +331,14 @@ class Scheduling(commands.Cog):
         
         self.scheduled_tasks[id].cancel()
             
-        self.scheduled_tasks[id] = self.bot.loop.create_task(self.schedule(
-            self.send_scheduled_message,
-            self.get_wait_seconds(datetime.fromisoformat(post["post_time"])),
-            id,
-            channel or self.bot.get_channel(post["channel_id"]),
-            post["content"],
-            post["attachments"],
-            post["publish"]))
+        self.scheduled_tasks[id] = self.create_schedule_task(
+            wait_seconds=self.get_wait_seconds(datetime.fromisoformat(post["post_time"])),
+            task_id=id,
+            channel=channel or self.bot.get_channel(post["channel_id"]),
+            content=post["content"],
+            attachments=post["attachments"],
+            publish=post["publish"]
+            )
         
         try:
             with open(self.scheduled_posts_file_path, 'w') as file:
@@ -342,21 +365,9 @@ class Scheduling(commands.Cog):
         if post is None or ctx.guild_id != post["guild_id"]:
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
-        self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != id]
+        
         self.scheduled_tasks[id].cancel()
-        self.delete_finished_tasks()
-
-        for path in post["attachments"]:
-            try:
-                os.remove(path)
-            except Exception as e:
-                logging.error(f"Failed to delete file: {e}")
-
-        try:
-            with open(self.scheduled_posts_file_path, 'w') as file:
-                json.dump(self.scheduled_posts, file, indent=4)
-        except (OSError, json.JSONDecodeError) as e:
-            logging.error(f"Failed to delete post from file: {e}")
+        self.cleanup_schedule_remains(id, post["attachments"])
 
         await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
 
