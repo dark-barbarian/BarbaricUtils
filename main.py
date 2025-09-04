@@ -281,11 +281,9 @@ async def on_ready():
         
         if os.path.exists(scheduling.scheduled_posts_file_path):
             with open(scheduling.scheduled_posts_file_path, 'r') as file:
-                scheduling.load_scheduled_posts(json.load(file))
+                await scheduling.load_scheduled_posts(json.load(file))
     except (OSError, json.JSONDecodeError) as e:
         logging.error(f"Error when reading and initializing json files: {e}")
-
-    atexit.register(scheduling.cancel_all_tasks)
     
     logging.info(f'Logged in as {bot.user}')
     page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))

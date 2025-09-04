@@ -1,10 +1,11 @@
 import asyncio
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 import inspect
 import json
 import logging
 import os
+import re
 from typing import Any, Coroutine, cast
 from discord import option
 import discord
@@ -12,9 +13,110 @@ from discord.ext import commands
 
 from utils.bot_utils import create_embed, create_task_with_logging, local_tz
 
+_bot: commands.Bot = commands.Bot()
+
+class RemindMeSelect(discord.ui.Select):
+    def __init__(self, message: discord.Message):
+        self.message = message
+        options = [
+            discord.SelectOption(label="in 1h"),
+            discord.SelectOption(label="in 12h"),
+            discord.SelectOption(label="in 24h"),
+            discord.SelectOption(label="at 8:00"),
+            discord.SelectOption(label="at 18:00"),
+            discord.SelectOption(label="at 20:00"),
+            #discord.SelectOption(label="Other") #TODO
+        ]
+        super().__init__(placeholder="Choose a time...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        chosen = cast(str, self.values[0])
+        
+        if chosen == "Other":
+            await interaction.response.send_modal(CustomRemindModal(self.message))
+            return
+        
+        now = datetime.now(local_tz)
+        if chosen.startswith("in "):
+            remind_at = now + timedelta(hours=int(cast(re.Match[str], re.search(r"\d+", chosen)).group()))
+        elif chosen.startswith("at "):
+            hour = int(chosen.split(" ")[1].split(":")[0])
+            remind_at = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if remind_at < now:
+                remind_at = remind_at + timedelta(days=1)
+        else:
+            remind_at = now + timedelta(minutes=1)
+        
+        scheduling = cast(Scheduling, _bot.get_cog("Scheduling"))
+        task_id = "-1"
+        while task_id in scheduling.scheduled_tasks:
+            task_id = str(int(task_id) - 1)
+        
+        content = f"Here's your reminder about https://discord.com/channels/{interaction.guild_id}/{interaction.channel_id}/{self.message.id}"
+        scheduling.scheduled_posts.append({
+            "id": task_id,
+            "guild_id": interaction.guild_id,
+            "channel_id": -1,
+            "message_id": self.message.id,
+            "channel_id_source": interaction.channel_id,
+            "content": content,
+            "post_time": remind_at.isoformat(),
+            "attachments": [],
+            "publish": False
+        })
+        
+        app_info = await _bot.application_info()
+        scheduling.scheduled_tasks[task_id] = scheduling.create_schedule_task(
+            wait_seconds=scheduling.get_wait_seconds(remind_at),
+            task_id=task_id,
+            channel=app_info.owner,
+            content=content,
+            attachments=[],
+            publish=False
+            )
+        
+        try:
+            with open(scheduling.scheduled_posts_file_path, 'w') as file:
+                json.dump(scheduling.scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store reminder to file: {e}")
+        
+        logging.info(f"Reminder {task_id} set for {remind_at.isoformat()}")
+
+        await interaction.response.send_message(embed=create_embed(
+            description=f"Alright, I'll remind you about https://discord.com/channels/{interaction.guild_id}/{interaction.channel_id}/{self.message.id} <t:{int(remind_at.timestamp())}:R>!",
+            color=0x00FF00
+        ), ephemeral=True)
+
+
+class RemindSelectView(discord.ui.View):
+    def __init__(self, message: discord.Message):
+        super().__init__()
+        self.add_item(RemindMeSelect(message))
+
+
+class CustomRemindModal(discord.ui.Modal):
+    def __init__(self, message: discord.Message):
+        super().__init__(title="Custom label")
+        self.message = message
+
+        self.add_item(discord.ui.InputText(
+            label="Enter your custom label",
+            style=discord.InputTextStyle.short
+        ))
+
+    async def callback(self, interaction: discord.Interaction):
+        label = self.children[0].value
+        await interaction.response.send_message(
+            f"✅ You labeled:\n>>> {self.message.content}\nCustom Label: **{label}**",
+            ephemeral=True
+        )
+
 
 class Scheduling(commands.Cog):
     def __init__(self, bot):
+        global _bot
+        _bot = bot
         self.bot: commands.Bot = bot
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
         self.scheduled_posts: list[dict] = []
@@ -29,27 +131,36 @@ class Scheduling(commands.Cog):
         await asyncio.sleep(wait_seconds)
         
         logging.info(f"Finished waiting, posting {id} now.")
-        result = what(*args)
+        result = what(id, *args)
         if inspect.isawaitable(result):
             await result
     
-    async def send_scheduled_message(self, channel: discord.TextChannel, content: str, file_paths: list[str], publish: bool):
+    async def send_scheduled_message(self, id: str, channel: discord.TextChannel | discord.User, content: str, file_paths: list[str], publish: bool):
         files = [discord.File(path) for path in file_paths if os.path.exists(path)]
-        message = await channel.send(content, files=files)
-        if publish:
-            await message.publish()
+        try:
+            message = await channel.send(content, files=files)
+            if publish:
+                await message.publish()
+        finally:
+            self.cleanup_schedule_remains(id, file_paths)
     
-    def load_scheduled_posts(self, posts: list):
+    async def load_scheduled_posts(self, posts: list):
         for post in posts:
             wait_seconds = self.get_wait_seconds(datetime.fromisoformat(post["post_time"]))
             if wait_seconds <= 0:
                 logging.info(f"Trying to schedule {post['id']} failed: Due date is in the past.")
                 continue
             
+            if post["id"].startswith("-"):
+                app_info = await self.bot.application_info()
+                channel = app_info.owner
+            else:
+                channel = self.bot.get_channel(post["channel_id"])
+            
             self.scheduled_tasks[post["id"]] = self.create_schedule_task(
                 wait_seconds=wait_seconds,
                 task_id=post["id"],
-                channel=self.bot.get_channel(post["channel_id"]),
+                channel=channel,
                 content=post["content"],
                 attachments=post["attachments"],
                 publish=post["publish"]
@@ -78,18 +189,12 @@ class Scheduling(commands.Cog):
             kwargs["attachments"],
             kwargs["publish"]))
         
-        task.add_done_callback(lambda _: self.cleanup_schedule_remains(kwargs["task_id"], kwargs["attachments"]))
-        
         return task
         
     def delete_finished_tasks(self):
         self.scheduled_tasks = {
             k: t for k, t in self.scheduled_tasks.items() if not t.done()
         }
-    
-    def cancel_all_tasks(self):
-        for _, task in self.scheduled_tasks.items():
-            task.cancel()
     
     def cleanup_schedule_remains(self, task_id: str, file_paths: list[str]):
         self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != task_id]
@@ -232,12 +337,11 @@ class Scheduling(commands.Cog):
     async def list_scheduled_posts(self, ctx: discord.ApplicationContext):
         response = ""
         for post in self.scheduled_posts:
-            if ctx.guild_id != post["guild_id"]:
+            if ctx.guild_id != post["guild_id"] or post["id"].startswith("-"):
                 continue
-            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} on <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:F> in <#{post["channel_id"]}>{' (\u2060:mega:\u2060)' if post["publish"] else ''}\n"
+            response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:R> in <#{post["channel_id"]}>{' (\u2060:mega:\u2060)' if post["publish"] else ''}\n"
 
-        local_posts = [post for post in self.scheduled_posts if post["guild_id"] == ctx.guild_id]
-        if len(local_posts) == 0:
+        if len(response) == 0:
             await ctx.respond(embed=create_embed(description="No posts have been scheduled."))
         else:
             await ctx.respond(embed=create_embed(description=response))
@@ -280,7 +384,7 @@ class Scheduling(commands.Cog):
     async def modify_scheduled_post(self, ctx: discord.ApplicationContext, id: str, channel: discord.abc.GuildChannel, date: str, message_id: str, publish: bool):
         post = self.get_post_by_id(id)
         
-        if post is None or ctx.guild_id != post["guild_id"]:
+        if post is None or ctx.guild_id != post["guild_id"] or id.startswith("-"):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
         
@@ -362,7 +466,7 @@ class Scheduling(commands.Cog):
     async def delete_scheduled_post(self, ctx: discord.ApplicationContext, id: str):
         post = self.get_post_by_id(id)
         
-        if post is None or ctx.guild_id != post["guild_id"]:
+        if post is None or ctx.guild_id != post["guild_id"] or id.startswith("-"):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
         
@@ -370,6 +474,18 @@ class Scheduling(commands.Cog):
         self.cleanup_schedule_remains(id, post["attachments"])
 
         await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
+    
+    
+    @commands.message_command(name="Remind Me")
+    async def remind_me(self, ctx: discord.ApplicationContext, message: discord.Message):
+        await ctx.respond(
+            "Remind me about this message:",
+            view=RemindSelectView(message),
+            ephemeral=True,
+            delete_after=10
+        )
 
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))
+
+#TODO: add Other option for reminders and make a separate list for reminders which is personal
