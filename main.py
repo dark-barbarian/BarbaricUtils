@@ -32,7 +32,7 @@ bot = commands.Bot(owner_id=191530044491956224)
 ####################################################################
 
 BOT_REPORTS_CHANNEL_ID = 1403711339355963443
-MEMORY_INTERVAL_HOURS = 6  # must be 0 < h <= 24
+MEMORY_INTERVAL_HOURS = 12  # must be 0 < h <= 24
 
 # TODO: convert to reaction emojis
 async def cancel(ctx: discord.ApplicationContext, content: str):
