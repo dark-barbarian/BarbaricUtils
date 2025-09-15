@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 
 import requests
@@ -28,22 +29,24 @@ def fandom_login():
     }
 
     SEMAPHORE_AUTH.acquire(blocking=True)
-    response = SESSION.get('https://services.fandom.com/kratos-public/self-service/login/api')
-    data = response.json()
-    if response.status_code != 200:
-        SEMAPHORE_AUTH.release()
-        return False
+    
+    try:
+        response = SESSION.get('https://services.fandom.com/kratos-public/self-service/login/api')
+        if response.status_code != 200:
+            return
+        data = response.json()
+        
+        response = SESSION.post(data['ui']['action'], headers=headers, data=payload)
+        if response.status_code != 200:
+            return
+        data = response.json()
 
-    response = SESSION.post(data['ui']['action'], headers=headers, data=payload)
-    data = response.json()
-    if response.status_code != 200:
+        global SESSION_TOKEN
+        SESSION_TOKEN = data['session_token']
+    except Exception:
+        logging.exception('An error occurred when logging into Fandom!')
+    finally:
         SEMAPHORE_AUTH.release()
-        return False
-
-    global SESSION_TOKEN
-    SESSION_TOKEN = data['session_token']
-    SEMAPHORE_AUTH.release()
-    return True
 
 
 def fandom_logout():

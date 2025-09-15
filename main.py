@@ -1,4 +1,3 @@
-import atexit
 import bisect
 from datetime import time
 import io
@@ -6,6 +5,9 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
+import threading
+import time as t
 from typing import cast
 
 import discord
@@ -26,6 +28,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %
 ])
 
 bot = commands.Bot(owner_id=191530044491956224)
+watchdog_last_tick = t.time()
 
 ####################################################################
 ######################### GENERAL METHODS ##########################
@@ -61,7 +64,18 @@ async def memory_reporter(channel: discord.TextChannel, process: psutil.Process)
     cpu_percent = process.cpu_percent(interval=None)
     if channel:
         await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
-        
+
+@tasks.loop(seconds=5)
+async def watchdog_ticker():
+    global watchdog_last_tick
+    watchdog_last_tick = t.time()
+
+def watchdog(interval=5, timeout=15):
+    while True:
+        t.sleep(interval)
+        if t.time() - watchdog_last_tick > timeout:
+            logging.error("Bot appears frozen, killing the process...")
+            os._exit(1)
 
 ####################################################################
 ############################ COMMANDS ##############################
@@ -74,6 +88,18 @@ async def memory_reporter(channel: discord.TextChannel, process: psutil.Process)
 async def ping(ctx: discord.ApplicationContext):
     await ctx.respond(embed=create_embed('Latency', f'{round(bot.latency * 1000)} ms', color=0x000000))
     return
+
+
+@bot.slash_command(
+    name="restart",
+    description="Restart the bot (owner only)"
+)
+@commands.is_owner()
+async def restart (ctx: discord.ApplicationContext):
+    interaction = await ctx.respond("Restarting...")
+    response = await cast(discord.Interaction, interaction).original_response()
+    os.execv(sys.executable, ['python'] + sys.argv + [str(response.channel.id), str(response.id)])
+
 
 @bot.slash_command(
     name="wikiupdate",
@@ -102,7 +128,7 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
                                              color=0xFF0000), ephemeral=True)
         return
     
-    if not module.startswith('Modul:'):
+    if not module.startswith(('Modul:', 'Module:')):
         module = "Modul:" + module
     
     await ctx.defer()
@@ -116,8 +142,12 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
         return
 
     data, update_manually = clash_stats.update_wiki_stats(module, wiki)
-    response = list(data.keys())[0]
-    if response == 'edit' and data['edit']['result'] == 'Success':
+    if not data:
+        await ctx.respond(embed=create_embed(description="Something went wrong. Please try again.", color=0xFF0000), ephemaral=True)
+        return
+    
+    response = list(data.keys())[0] # type: ignore
+    if response == 'edit' and data['edit']['result'] == 'Success': # type: ignore
         if len(update_manually):
             output_file_data = io.BytesIO("\n".join(sorted(update_manually, key=str.lower)).encode("utf-8"))
             output_file = discord.File(fp=output_file_data, filename="pages.txt")
@@ -126,7 +156,7 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
         await ctx.respond(embed=create_embed(description="Added the data successfully!", color=0x00FF00))
     elif response == 'error':
         await ctx.respond(embed=create_embed(description="Something went wrong!",
-                                             footer=data['error']['code'], color=0xFF0000), ephemeral=True)
+                                             footer=data['error']['code'], color=0xFF0000), ephemeral=True) # type: ignore
     else:
         await ctx.respond(embed=create_embed(description="Something went wrong!", color=0xFF0000), ephemeral=True)
 
@@ -141,6 +171,9 @@ async def wikiupdate(ctx: discord.ApplicationContext, file: discord.Attachment, 
 )
 @commands.is_owner()
 async def add_module(ctx: discord.ApplicationContext, name: str):
+    if name.startswith(('Modul:', 'Module:')):
+        name = name.split(':', 1)[1]
+    
     bisect.insort(clash_stats.DATA_MODULE_NAMES, name, key=str.lower)
     clash_stats.DATA_MODULE_NAMES = list(dict.fromkeys(clash_stats.DATA_MODULE_NAMES))
     
@@ -289,8 +322,17 @@ async def on_ready():
     page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
     memory_reporter.start(bot.get_channel(BOT_REPORTS_CHANNEL_ID), psutil.Process(os.getpid()))
     
+    watchdog_ticker.start()
+    threading.Thread(target=watchdog, daemon=True).start()
+    
     await bot.wait_until_ready()
     await cast(discord.TextChannel, bot.get_channel(BOT_REPORTS_CHANNEL_ID)).send(":arrows_counterclockwise: Finished restarting!")
+    
+    # Called after bot was restarted via command
+    if (len(sys.argv) > 2):
+        channel = bot.get_channel(int(sys.argv[1]))
+        msg = await cast(discord.TextChannel, channel).fetch_message(int(sys.argv[2]))
+        await msg.edit(content="Restart has finished, I'm back!")
 
 
 cogs_list = [
@@ -303,6 +345,10 @@ cogs_list = [
 for cog in cogs_list:
     bot.load_extension(f"cogs.{cog}")
 
-bot.run(config.DISCORD_TOKEN)
+try:
+    bot.run(config.DISCORD_TOKEN)
+except Exception:
+    logging.exception('Fatal error in outer run loop!')
+    sys.exit(1)
 
 #TODO: implement scheduling stuff (wiki), add command: list observed/manual pages

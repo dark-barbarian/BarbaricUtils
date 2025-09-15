@@ -1,3 +1,4 @@
+import logging
 import threading
 
 from utils import fandom_auth
@@ -35,9 +36,14 @@ def get_csrf_token():
     }
 
     SEMAPHORE_WIKI.acquire(blocking=True)
-    response = fandom_auth.SESSION.get(url=URL, params=params)
-    data = response.json()
-    SEMAPHORE_WIKI.release()
+    try:
+        response = fandom_auth.SESSION.get(url=URL, params=params)
+        data = response.json()
+    except Exception:
+        logging.exception('An error occurred when retrieving the CSRF token!')
+        return ""
+    finally:
+        SEMAPHORE_WIKI.release()
 
     return data['query']['tokens']['csrftoken']
 
@@ -58,11 +64,17 @@ def get_contents(page: str, wiki: str = DEFAULT_WIKI):
     }
 
     SEMAPHORE_WIKI.acquire(blocking=True)
-    response = fandom_auth.SESSION.get(url=URL, params=payload)
-    data = response.json()
-    SEMAPHORE_WIKI.release()
+    try:
+        response = fandom_auth.SESSION.get(url=URL, params=payload)
+        data = response.json()
+    except Exception:
+        logging.exception('An error occurred when retrieving the page contents!')
+        return ""
+    finally:
+        SEMAPHORE_WIKI.release()
 
     if "error" in data:
+        logging.error(f'An error occurred when retrieving the page contents: {data['error']}')
         return ""
 
     raw_stats = data['query']['pages']
@@ -90,7 +102,11 @@ def edit_page(page: str, content: str, bot: bool = False, wiki: str = DEFAULT_WI
     response = fandom_auth.SESSION.post(URL, data=params)
     SEMAPHORE_WIKI.release()
 
-    return response.json()
+    try:
+        return response.json()
+    except Exception:
+        logging.exception('An error occurred when editing the page!')
+        return False
 
 
 def move_page(old_name: str, new_name: str, wiki: str = DEFAULT_WIKI):
@@ -110,7 +126,11 @@ def move_page(old_name: str, new_name: str, wiki: str = DEFAULT_WIKI):
     response = fandom_auth.SESSION.post(URL, data=params)
     SEMAPHORE_WIKI.release()
 
-    return response.json()
+    try:
+        return response.json()
+    except Exception:
+        logging.exception('An error occurred when moving the page!')
+        return False
 
 
 def upload_image(title: str, source_url: str, wiki: str = DEFAULT_WIKI):
@@ -130,4 +150,8 @@ def upload_image(title: str, source_url: str, wiki: str = DEFAULT_WIKI):
     response = fandom_auth.SESSION.post(URL, data=params)
     SEMAPHORE_WIKI.release()
 
-    return response.json()
+    try:
+        return response.json()
+    except Exception:
+        logging.exception('An error occurred when uploading the image!')
+        return False
