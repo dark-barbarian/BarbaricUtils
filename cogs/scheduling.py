@@ -56,7 +56,7 @@ class RemindMeSelect(discord.ui.Select):
         scheduling.scheduled_posts.append({
             "id": task_id,
             "guild_id": interaction.guild_id,
-            "channel_id": -1,
+            "channel_id": interaction.user.id,
             "message_id": self.message.id,
             "channel_id_source": interaction.channel_id,
             "content": content,
@@ -65,11 +65,10 @@ class RemindMeSelect(discord.ui.Select):
             "publish": False
         })
         
-        app_info = await _bot.application_info()
         scheduling.scheduled_tasks[task_id] = scheduling.create_schedule_task(
             wait_seconds=scheduling.get_wait_seconds(remind_at),
             task_id=task_id,
-            channel=app_info.owner,
+            channel=interaction.user,
             content=content,
             attachments=[],
             publish=False
@@ -152,8 +151,8 @@ class Scheduling(commands.Cog):
                 continue
             
             if post["id"].startswith("-"):
-                app_info = await self.bot.application_info()
-                channel = app_info.owner
+                user = await self.bot.get_or_fetch_user(post["channel_id"])
+                channel = user
             else:
                 channel = self.bot.get_channel(post["channel_id"])
             
