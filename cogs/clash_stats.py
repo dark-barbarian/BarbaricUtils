@@ -15,6 +15,11 @@ MODULE_LIST_FILE_PATH = "./csvmodules.json"
 OBSERVABLE_PAGES_LIST_FILE_PATH = "./updatemanually.json"
 DATA_MODULE_NAMES = []
 
+LEVEL_KEYS = [
+    "TroopLevel", "BuildingLevel", "HeroLevel", "SpellLevel",
+    "TrapLevel", "ModuleLevel", "EquipmentLevel",
+]
+
 # list of pages that have entries not contained in the CSV (e.g. AltDPS for Electro Titan), that need to be updated manually
 PAGES_WITH_MANUAL_ENTRIES: dict[str, list[str]] = {}
 
@@ -114,21 +119,37 @@ def update_wiki_stats(page: str, wiki: str):
 
     in_wiki_version = convert_from_lua(page, wiki)
 
+    # update existing entries
     for k, v in cast(dict, in_wiki_version).items():
         target = v['Name']
         result_key, result_value = find_dict_by_target(result, target)
         v_before = v.copy()
+        v_before_level = next((v_before[k] for k in LEVEL_KEYS if v_before.get(k) is not None), None)
         update_values(v, result_value)
-
-        if (v_before != v) and (k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))):
-            update_manually.append(k)
-            logging.warning(f"Possibly manual update necessary: {k}")
-            print('\033[93m' + "Possibly manual update necessary: " + k + '\033[0m')
+        v_level = next((v[k] for k in LEVEL_KEYS if v.get(k) is not None), None)
+        
+        try:
+            if ((k in flatten(list(PAGES_WITH_MANUAL_ENTRIES.values()))) and
+                ((v_before_level and v_level and len(v_before_level) < len(v_level)) or
+                (not v_before_level and not v_level and v_before != v))):
+                update_manually.append(k)
+                logging.warning(f"Possibly manual update necessary: {k}")
+                print('\033[93m' + "Possibly manual update necessary: " + k + '\033[0m')
+        except TypeError:  # easiest solution to not break the bot if v isn't a dict
+            pass
 
         if result_key != "":
             del result[result_key]
 
+    # add new entries
     for k, v in result.items():
+        if page.endswith(("Building/data", "Building2/data")):
+            if "ResourceType" not in v:  # should always be true, but in case it does exist, don't overwrite it
+                v["ResourceType"] = ""
+        elif page.endswith(("Troop/data", "Spell/data", "Hero/data")):
+            if "ElixirType" not in v:  # should always be true, but in case it does exist, don't overwrite it
+                v["ElixirType"] = ""
+        
         cast(dict, in_wiki_version)[k] = v
 
     return wiki_operations.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki), update_manually
