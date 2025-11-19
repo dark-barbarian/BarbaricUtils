@@ -48,15 +48,16 @@ class RemindMeSelect(discord.ui.Select):
             remind_at = now + timedelta(minutes=1)
         
         scheduling = cast(Scheduling, _bot.get_cog("Scheduling"))
-        task_id = "-1"
-        while task_id in scheduling.scheduled_tasks:
-            task_id = str(int(task_id) - 1)
+        task_id = '-' + f"{now.timestamp():.6f}".split(".")[1]
+        while (task_id in scheduling.scheduled_tasks) or (task_id[1:] in scheduling.scheduled_tasks):
+            task_id = str(int(task_id) - 1).zfill(7)
         
         content = f"Here's your reminder about https://discord.com/channels/{interaction.guild_id}/{interaction.channel_id}/{self.message.id}"
         scheduling.scheduled_posts.append({
             "id": task_id,
+            "author_id": interaction.user.id, # type: ignore
             "guild_id": interaction.guild_id,
-            "channel_id": interaction.user.id,
+            "channel_id": interaction.user.id, # type: ignore
             "message_id": self.message.id,
             "channel_id_source": interaction.channel_id,
             "content": content,
@@ -96,14 +97,17 @@ class RemindSelectView(discord.ui.View):
 
 class CustomRemindModal(discord.ui.Modal):
     def __init__(self, message: discord.Message):
-        super().__init__(title="Custom label")
+        super().__init__(title="Reminding you...")
         self.message = message
 
         self.add_item(discord.ui.InputText(
-            label="Enter your custom label",
+            label="When do you want me to remind you?",
+            placeholder="15.1. 14:20",
+            value="", # TODO: heutiges datum und uhrzeit plus ne minute
             style=discord.InputTextStyle.short
         ))
 
+    # TODO: datum validaten mit der logik von unten und damit schedulen
     async def callback(self, interaction: discord.Interaction):
         label = self.children[0].value
         await interaction.response.send_message(
@@ -151,7 +155,7 @@ class Scheduling(commands.Cog):
                 continue
             
             if post["id"].startswith("-"):
-                user = await self.bot.get_or_fetch_user(post["channel_id"])
+                user = await self.bot.get_or_fetch_user(post["author_id"])
                 channel = user
             else:
                 channel = self.bot.get_channel(post["channel_id"])
@@ -177,6 +181,21 @@ class Scheduling(commands.Cog):
     
     def get_post_by_id(self, id: str):
         return next((d for d in self.scheduled_posts if d["id"] == id), None)
+    
+    def validate_post(self, ctx: discord.ApplicationContext, post: dict | None):
+        if (post is None or
+            ctx.guild_id != post["guild_id"] or
+            ctx.author.id != post["author_id"] or
+            post["id"].startswith("-")):
+            return False
+        return True
+    
+    def validate_reminder(self, ctx: discord.ApplicationContext, post: dict | None):
+        if (post is None or
+            ctx.author.id != post["author_id"] or
+            not post["id"].startswith("-")):
+            return False
+        return True
     
     def create_schedule_task(self, **kwargs):
         task = create_task_with_logging(self.bot.loop, self.schedule(
@@ -286,8 +305,8 @@ class Scheduling(commands.Cog):
                 return
         
         task_id = f"{now.timestamp():.6f}".split(".")[1]
-        while task_id in self.scheduled_tasks:
-            task_id = str(int(task_id) + 1)
+        while (task_id in self.scheduled_tasks) or (('-' + task_id) in self.scheduled_tasks):
+            task_id = str(int(task_id) + 1).zfill(6)
         
         content: str = to_schedule.content
         
@@ -299,6 +318,7 @@ class Scheduling(commands.Cog):
         
         self.scheduled_posts.append({
             "id": task_id,
+            "author_id": ctx.author.id,
             "guild_id": ctx.guild_id,
             "channel_id": channel.id,
             "message_id": to_schedule.id,
@@ -336,12 +356,30 @@ class Scheduling(commands.Cog):
     async def list_scheduled_posts(self, ctx: discord.ApplicationContext):
         response = ""
         for post in self.scheduled_posts:
-            if ctx.guild_id != post["guild_id"] or post["id"].startswith("-"):
+            if not self.validate_post(ctx, post):
                 continue
             response += f"- `{post["id"]}`: https://discord.com/channels/{post["guild_id"]}/{post["channel_id_source"]}/{post["message_id"]} <t:{int(datetime.fromisoformat(post["post_time"]).timestamp())}:R> in <#{post["channel_id"]}>{' (\u2060:mega:\u2060)' if post["publish"] else ''}\n"
 
         if len(response) == 0:
             await ctx.respond(embed=create_embed(description="No posts have been scheduled."))
+        else:
+            await ctx.respond(embed=create_embed(description=response))
+    
+    
+    #TODO: handle too many scheduled reminders
+    @commands.slash_command(
+        name="list_reminders",
+        description="Lists all your reminders"
+    )
+    async def list_reminders(self, ctx: discord.ApplicationContext):
+        response = ""
+        for reminder in self.scheduled_posts:
+            if not self.validate_reminder(ctx, reminder):
+                continue
+            response += f"- `{reminder["id"][1:]}`: https://discord.com/channels/{reminder["guild_id"]}/{reminder["channel_id_source"]}/{reminder["message_id"]} <t:{int(datetime.fromisoformat(reminder["post_time"]).timestamp())}:R>\n"
+            
+        if len(response) == 0:
+            await ctx.respond(embed=create_embed(description="You have no reminders."))
         else:
             await ctx.respond(embed=create_embed(description=response))
     
@@ -383,9 +421,10 @@ class Scheduling(commands.Cog):
     async def modify_scheduled_post(self, ctx: discord.ApplicationContext, id: str, channel: discord.abc.GuildChannel, date: str, message_id: str, publish: bool):
         post = self.get_post_by_id(id)
         
-        if post is None or ctx.guild_id != post["guild_id"] or id.startswith("-"):
+        if (not self.validate_post(ctx, post)):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
+        assert post != None
         
         if not channel and not date and not message_id and not publish:
             await ctx.respond(embed=create_embed(description="Please specify at least one value to update.", color=0xFF0000))
@@ -465,14 +504,40 @@ class Scheduling(commands.Cog):
     async def delete_scheduled_post(self, ctx: discord.ApplicationContext, id: str):
         post = self.get_post_by_id(id)
         
-        if post is None or ctx.guild_id != post["guild_id"] or id.startswith("-"):
+        if (not self.validate_post(ctx, post)):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
+        assert post != None
         
         self.scheduled_tasks[id].cancel()
         self.cleanup_schedule_remains(id, post["attachments"])
 
         await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
+    
+    
+    @commands.slash_command(
+        name="delete_reminder",
+        description="Deletes a reminder"
+    )
+    @option(
+        "id",
+        description="The reminder's id",
+        input_type=str,
+        required=True
+    )
+    async def delete_reminder(self, ctx: discord.ApplicationContext, id: str):
+        id = '-' + id
+        reminder = self.get_post_by_id(id)
+        
+        if (not self.validate_reminder(ctx, reminder)):
+            await ctx.respond(embed=create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000))
+            return
+        assert reminder != None
+        
+        self.scheduled_tasks[id].cancel()
+        self.cleanup_schedule_remains(id, reminder["attachments"])
+
+        await ctx.respond(embed=create_embed(description="Deleted reminder successfully.", color=0x00FF00))
     
     
     @commands.message_command(name="Remind Me")
@@ -487,4 +552,4 @@ class Scheduling(commands.Cog):
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))
 
-#TODO: add Other option for reminders and make a separate list for reminders which is personal
+#TODO: add Other option for reminders

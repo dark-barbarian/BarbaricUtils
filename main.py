@@ -351,4 +351,4 @@ except Exception:
     logging.exception('Fatal error in outer run loop!')
     sys.exit(1)
 
-#TODO: implement scheduling stuff (wiki), add command: list observed/manual pages, schedules owner only machen oder dafür sorgen dass andere nicht meine schedules sehen oder löschen können
+#TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
