@@ -25,7 +25,7 @@ class RemindMeSelect(discord.ui.Select):
             discord.SelectOption(label="at 8:00"),
             discord.SelectOption(label="at 18:00"),
             discord.SelectOption(label="at 20:00"),
-            #discord.SelectOption(label="Other") #TODO
+            discord.SelectOption(label="Other")
         ]
         super().__init__(placeholder="Choose a time...", options=options)
 
@@ -100,20 +100,76 @@ class CustomRemindModal(discord.ui.Modal):
         super().__init__(title="Reminding you...")
         self.message = message
 
+        example_date = (datetime.now(local_tz) + timedelta(minutes=5)).strftime("%d.%m. %H:%M")
         self.add_item(discord.ui.InputText(
             label="When do you want me to remind you?",
-            placeholder="15.1. 14:20",
-            value="", # TODO: heutiges datum und uhrzeit plus ne minute
+            placeholder=example_date,
+            value=example_date,
             style=discord.InputTextStyle.short
         ))
 
-    # TODO: datum validaten mit der logik von unten und damit schedulen
     async def callback(self, interaction: discord.Interaction):
-        label = self.children[0].value
-        await interaction.response.send_message(
-            f"✅ You labeled:\n>>> {self.message.content}\nCustom Label: **{label}**",
-            ephemeral=True
-        )
+        date = self.children[0].value or ""
+        
+        try:
+            date_parts = date.split(" ")
+            if date_parts and date_parts[0] and not date_parts[0].endswith("."):
+                date = date.replace(" ", ". ", 1)
+            dt = datetime.strptime(date, "%d.%m. %H:%M")
+            now = datetime.now(local_tz)
+            dt = dt.replace(year=now.year, tzinfo=local_tz)
+            
+            if dt < now:
+                dt = dt.replace(year=now.year + 1, tzinfo=local_tz)
+        except ValueError:
+            await interaction.response.send_message(
+                embed=create_embed(description="Please use the correct format for the date: `15.1. 14:20`", color=0xFF0000),
+                ephemeral=True
+            )
+            return
+        
+        remind_at = dt.replace(second=0, microsecond=0)
+        
+        scheduling = cast(Scheduling, _bot.get_cog("Scheduling"))
+        task_id = '-' + f"{now.timestamp():.6f}".split(".")[1]
+        while (task_id in scheduling.scheduled_tasks) or (task_id[1:] in scheduling.scheduled_tasks):
+            task_id = str(int(task_id) - 1).zfill(7)
+        
+        content = f"Here's your reminder about https://discord.com/channels/{interaction.guild_id}/{interaction.channel_id}/{self.message.id}"
+        scheduling.scheduled_posts.append({
+            "id": task_id,
+            "author_id": interaction.user.id, # type: ignore
+            "guild_id": interaction.guild_id,
+            "channel_id": interaction.user.id, # type: ignore
+            "message_id": self.message.id,
+            "channel_id_source": interaction.channel_id,
+            "content": content,
+            "post_time": remind_at.isoformat(),
+            "attachments": [],
+            "publish": False
+        })
+        
+        scheduling.scheduled_tasks[task_id] = scheduling.create_schedule_task(
+            wait_seconds=scheduling.get_wait_seconds(remind_at),
+            task_id=task_id,
+            channel=interaction.user,
+            content=content,
+            attachments=[],
+            publish=False
+            )
+        
+        try:
+            with open(scheduling.scheduled_posts_file_path, 'w') as file:
+                json.dump(scheduling.scheduled_posts, file, indent=4)
+        except (OSError, json.JSONDecodeError) as e:
+            logging.error(f"Failed to store reminder to file: {e}")
+        
+        logging.info(f"Reminder {task_id} set for {remind_at.isoformat()}")
+
+        await interaction.response.send_message(embed=create_embed(
+            description=f"Alright, I'll remind you about https://discord.com/channels/{interaction.guild_id}/{interaction.channel_id}/{self.message.id} <t:{int(remind_at.timestamp())}:R>!",
+            color=0x00FF00
+        ), ephemeral=True)
 
 
 class Scheduling(commands.Cog):
@@ -379,9 +435,9 @@ class Scheduling(commands.Cog):
             response += f"- `{reminder["id"][1:]}`: https://discord.com/channels/{reminder["guild_id"]}/{reminder["channel_id_source"]}/{reminder["message_id"]} <t:{int(datetime.fromisoformat(reminder["post_time"]).timestamp())}:R>\n"
             
         if len(response) == 0:
-            await ctx.respond(embed=create_embed(description="You have no reminders."))
+            await ctx.respond(embed=create_embed(description="You have no reminders."), ephemeral=True)
         else:
-            await ctx.respond(embed=create_embed(description=response))
+            await ctx.respond(embed=create_embed(description=response), ephemeral=True)
     
     
     @commands.slash_command(
@@ -552,4 +608,4 @@ class Scheduling(commands.Cog):
 def setup(bot: commands.Bot):
     bot.add_cog(Scheduling(bot))
 
-#TODO: add Other option for reminders
+#TODO: reduce code cloning, also date validate logik und schedule post logik auslagern
