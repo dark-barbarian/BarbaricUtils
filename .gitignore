@@ -4,3 +4,4 @@ barbaricutils.log
 stats.csv
 __pycache__/
 scheduled_posts.json
+.github/copilot-instructions.md
