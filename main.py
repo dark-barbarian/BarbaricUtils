@@ -47,7 +47,9 @@ async def cancel(ctx: discord.ApplicationContext, content: str):
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: discord.DiscordException):
     if isinstance(error, commands.NotOwner):
-        await ctx.respond(embed=create_embed('Error', "Sorry, only the bot owner can use this command!", color=0xFF0000))
+        await ctx.respond(embed=create_embed(description="Sorry, only the bot owner can use this command!", color=0xFF0000), ephemeral=True)
+    elif isinstance(error, commands.NoPrivateMessage):
+        await ctx.respond(embed=create_embed(description="Sorry, this command can't be used in a DM!", color=0xFF0000))
     else:
         logging.error(error)
         raise error
