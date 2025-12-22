@@ -22,6 +22,7 @@ exec python "$BASE_DIR/main.py"
 DISCORD_TOKEN=xxx
 ```
 `sudo chmod 600 /etc/BarbaricUtils.env`
+
 `sudo chown root:root /etc/BarbaricUtils.env`
 
 ---
