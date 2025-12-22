@@ -1,10 +1,9 @@
 import json
 import logging
+import os
 import threading
 
 import requests
-
-import config
 
 
 SESSION = requests.Session()
@@ -24,8 +23,8 @@ def fandom_login():
 
     payload = {
         'method': 'password',
-        'identifier': config.FANDOM_USERNAME,
-        'password': config.FANDOM_PASSWORD
+        'identifier': os.environ.get('FANDOM_USERNAME', ''),
+        'password': os.environ.get('FANDOM_PASSWORD', ''),
     }
 
     SEMAPHORE_AUTH.acquire(blocking=True)

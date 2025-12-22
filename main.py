@@ -18,7 +18,6 @@ import psutil
 from cogs import clash_stats
 from cogs.page_error_reminders import PageErrorReminders
 from cogs.scheduling import Scheduling
-import config
 from utils import wiki_operations
 from utils.bot_utils import create_embed, local_tz
 
@@ -348,9 +347,9 @@ for cog in cogs_list:
     bot.load_extension(f"cogs.{cog}")
 
 try:
-    bot.run(config.DISCORD_TOKEN)
+    bot.run(os.environ["DISCORD_TOKEN"])
 except Exception:
     logging.exception('Fatal error in outer run loop!')
     sys.exit(1)
 
-#TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
+#TODO: implement scheduling stuff (wiki), add command: list observed/manual pages, make deletions use autocomplete

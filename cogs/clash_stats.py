@@ -1,5 +1,6 @@
 import csv
 import logging
+import os
 import re
 from typing import Any, cast
 
@@ -8,7 +9,6 @@ import requests
 from slpp import slpp as lua
 
 from utils import wiki_operations
-import config
 
 CSV_FILE_PATH = "./stats.csv"
 MODULE_LIST_FILE_PATH = "./csvmodules.json"
@@ -165,7 +165,7 @@ def convert_from_lua(module: str, wiki: str):
 def get_clash_api_contents(session: requests.Session):
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': 'Bearer ' + config.CLASH_API_TOKEN
+        'Authorization': 'Bearer ' + os.environ.get("CLASH_API_TOKEN", ""),
     }
 
     response = session.get('https://api.clashofclans.com/v1/labels/players?limit=50', headers=headers)
