@@ -340,7 +340,7 @@ class Scheduling(commands.Cog):
     )
     @option(
         "date",
-        description="The date and time when to post the message (format: 15.1. 14:20)",
+        description=f"The date and time when to post the message (format: {(datetime.now(local_tz) + timedelta(days=3)).strftime("%d.%m. %H:%M")})",
         input_type=str,
         required=True
     )
