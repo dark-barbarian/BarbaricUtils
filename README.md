@@ -1,4 +1,1 @@
-- `pip install -U py-cord`
 - `pip install git+https://github.com/SirAnthony/slpp`
-- `pip install requests`
-- `pip install psutil`
