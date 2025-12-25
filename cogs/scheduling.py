@@ -19,6 +19,7 @@ from utils.bot_utils import LOCAL_TZ, create_embed, create_task_with_logging
 logger = logging.getLogger(__name__)
 
 EXAMPLE_DATE_FORMAT = (datetime.now(LOCAL_TZ) + timedelta(days=3)).strftime("%d.%m. %H:%M")
+SCHEDULED_POSTS_FILE_PATH = "./persistent/scheduled_posts.json"
 
 
 @dataclass
@@ -179,10 +180,10 @@ class Scheduling(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         """Initialize scheduling state and ensure attachment storage exists."""
         self.bot = bot
+
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
         self.scheduled_posts: list[dict] = []
 
-        self.scheduled_posts_file_path = "./persistent/scheduled_posts.json"
         Path("attachments").mkdir(parents=True, exist_ok=True)
 
     def _get_wait_seconds(self, dt: datetime) -> float:
@@ -235,30 +236,6 @@ class Scheduling(commands.Cog):
         """Check that the item is a reminder belonging to the author."""
         return not (post is None or ctx.author.id != post["author_id"] or not post["id"].startswith("-"))
 
-    async def validate_date_and_respond(self, date: str, response: discord.InteractionResponse) -> datetime | None:
-        """Validate date string and respond with an error if invalid; returns a datetime on success."""
-        try:
-            date_parts = date.split(" ")
-            if date_parts and date_parts[0] and not date_parts[0].endswith("."):
-                date = date.replace(" ", ". ", 1)
-            dt = datetime.strptime(date, "%d.%m. %H:%M")  # noqa: DTZ007
-            now = datetime.now(LOCAL_TZ)
-            dt = dt.replace(year=now.year, tzinfo=LOCAL_TZ)
-
-            if dt <= now:
-                dt = dt.replace(year=now.year + 1, tzinfo=LOCAL_TZ)
-        except ValueError:
-            example_date = (datetime.now(LOCAL_TZ) + timedelta(minutes=5)).strftime("%d.%m. %H:%M")
-            await response.send_message(
-                embed=create_embed(
-                    description=f"Please use the correct format for the date: `{example_date}`", color=0xFF0000
-                ),
-                ephemeral=True,
-            )
-            return None
-
-        return dt
-
     def _generate_task_id(self, now: datetime, *, is_reminder: bool) -> str:
         """Generate a unique task id; reminders receive a leading '-' prefix."""
         task_id = "-" + f"{now.timestamp():.6f}".split(".")[1]
@@ -287,7 +264,7 @@ class Scheduling(commands.Cog):
     def _persist_posts(self) -> None:
         """Persist scheduled posts/reminders to disk as JSON."""
         try:
-            with Path(self.scheduled_posts_file_path).open("w") as file:
+            with Path(SCHEDULED_POSTS_FILE_PATH).open("w") as file:
                 json.dump(self.scheduled_posts, file, indent=4)
         except (OSError, json.JSONDecodeError):
             logger.exception("Failed to update scheduled posts file")
@@ -304,6 +281,30 @@ class Scheduling(commands.Cog):
                 logger.exception("Failed to delete file")
 
         self._persist_posts()
+
+    async def validate_date_and_respond(self, date: str, response: discord.InteractionResponse) -> datetime | None:
+        """Validate date string and respond with an error if invalid; returns a datetime on success."""
+        try:
+            date_parts = date.split(" ")
+            if date_parts and date_parts[0] and not date_parts[0].endswith("."):
+                date = date.replace(" ", ". ", 1)
+            dt = datetime.strptime(date, "%d.%m. %H:%M")  # noqa: DTZ007
+            now = datetime.now(LOCAL_TZ)
+            dt = dt.replace(year=now.year, tzinfo=LOCAL_TZ)
+
+            if dt <= now:
+                dt = dt.replace(year=now.year + 1, tzinfo=LOCAL_TZ)
+        except ValueError:
+            example_date = (datetime.now(LOCAL_TZ) + timedelta(minutes=5)).strftime("%d.%m. %H:%M")
+            await response.send_message(
+                embed=create_embed(
+                    description=f"Please use the correct format for the date: `{example_date}`", color=0xFF0000
+                ),
+                ephemeral=True,
+            )
+            return None
+
+        return dt
 
     async def load_scheduled_posts(self, posts: list) -> None:
         """Restore scheduled tasks from a list of persisted posts and schedule them."""
