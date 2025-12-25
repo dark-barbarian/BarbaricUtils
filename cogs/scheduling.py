@@ -182,7 +182,7 @@ class Scheduling(commands.Cog):
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
         self.scheduled_posts: list[dict] = []
 
-        self.scheduled_posts_file_path = "./scheduled_posts.json"
+        self.scheduled_posts_file_path = "./persistent/scheduled_posts.json"
         Path("attachments").mkdir(parents=True, exist_ok=True)
 
     def _get_wait_seconds(self, dt: datetime) -> float:

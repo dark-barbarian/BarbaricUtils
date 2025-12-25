@@ -350,10 +350,6 @@ async def on_ready() -> None:
                 sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
                 clash_stats.PAGES_WITH_MANUAL_ENTRIES = sorted_data
 
-        if Path(page_error_reminders.categories_json_file_path).exists():
-            async with await anyio.open_file(page_error_reminders.categories_json_file_path, "r") as file:
-                page_error_reminders.wiki_categories = json.loads(await file.read())
-
         if Path(scheduling.scheduled_posts_file_path).exists():
             async with await anyio.open_file(scheduling.scheduled_posts_file_path, "r") as file:
                 await scheduling.load_scheduled_posts(json.loads(await file.read()))

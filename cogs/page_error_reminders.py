@@ -3,7 +3,6 @@ import json
 import logging
 from datetime import datetime, time
 
-import anyio
 import discord
 import requests
 from discord import option
@@ -24,7 +23,6 @@ class PageErrorReminders(commands.Cog):
 
         self.channel_id = 1372252214814310651  # Clash of Clans Wiki -> #wiki-category-report
         # self.channel_id = 836247026118295642  # barbs tests -> #bot  # noqa: ERA001
-        self.categories_json_file_path = "./wikicategories.json"
         self.wiki_categories = {}
 
     @tasks.loop(time=time(hour=12, tzinfo=LOCAL_TZ))
@@ -36,11 +34,6 @@ class PageErrorReminders(commands.Cog):
         data = self.fetch_categories("darkbarbarian.fandom.com", "Benutzer:DarkBarbarian/WikiCategories.json")
         if data:
             self.wiki_categories.update(data)
-            try:
-                async with await anyio.open_file(self.categories_json_file_path, "w") as file:
-                    await file.write(json.dumps(self.wiki_categories, ensure_ascii=False, indent=4))
-            except (OSError, json.JSONDecodeError):
-                logger.exception("Failed to store wiki categories to file")
 
         error_counter = 0
         for wiki, categories in self.wiki_categories.items():
@@ -128,17 +121,6 @@ class PageErrorReminders(commands.Cog):
     async def update_allowed_errors(self, ctx: discord.ApplicationContext, value: int) -> None:
         """Update the allowed error count threshold used in category reports."""
         self.wiki_categories["allowed_errors"] = value
-        try:
-            async with await anyio.open_file(self.categories_json_file_path, "w") as file:
-                await file.write(json.dumps(self.wiki_categories, ensure_ascii=False, indent=4))
-        except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to store allowed errors to file")
-            await ctx.respond(
-                embed=create_embed(
-                    description="Updated allowed errors until next restart, but saving failed.", color=0xFF0000
-                )
-            )
-            return
 
         await ctx.respond(
             embed=create_embed(description="Updated allowed errors in the category report!", color=0x00FF00)

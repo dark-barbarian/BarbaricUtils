@@ -16,8 +16,8 @@ from utils.botstate import bot_state
 logger = logging.getLogger(__name__)
 
 CSV_FILE_PATH = "./stats.csv"
-MODULE_LIST_FILE_PATH = "./csvmodules.json"
-OBSERVABLE_PAGES_LIST_FILE_PATH = "./updatemanually.json"
+MODULE_LIST_FILE_PATH = "./persistent/csvmodules.json"
+OBSERVABLE_PAGES_LIST_FILE_PATH = "./persistent/updatemanually.json"
 DATA_MODULE_NAMES = []
 
 LEVEL_KEYS = [
