@@ -67,7 +67,9 @@ class ClashStats(commands.Cog):
 
         for opt in cast("discord.SlashCommand", self.remove_observable_page).options:
             if opt.name == "name":
-                opt.autocomplete = self._autocomplete_page_observer_names
+                opt.autocomplete = discord.utils.basic_autocomplete(
+                    self._autocomplete_page_observer_names, filter=lambda *_: True
+                )
                 break
 
     async def _autocomplete_module_names(self, _ctx: discord.AutocompleteContext) -> list[str]:
@@ -368,6 +370,7 @@ class ClashStats(commands.Cog):
         """Add a page under a category to observe for manual updates."""
         observable_pages = self.pages_with_manual_entries
 
+        # TODO: eingefügte seiten werden nicht alphabetisch einsortiert
         bisect.insort(observable_pages.setdefault(category, []), name)
         self.pages_with_manual_entries = {
             key: observable_pages[key] for key in sorted(observable_pages.keys(), key=str.lower)

@@ -94,6 +94,14 @@ class RemindMeSelect(discord.ui.Select):
         )
 
         task_id = await cast("Scheduling", self.bot.get_cog("Scheduling")).create_reminder(args)
+        if task_id is None:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    description="Failed to create the reminder, please try again later.", color=0xFF0000
+                ),
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.send_message(
             embed=create_embed(
@@ -162,6 +170,14 @@ class CustomRemindModal(discord.ui.Modal):
         )
 
         task_id = await scheduling.create_reminder(args)
+        if task_id is None:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    description="Failed to create the reminder, please try again later.", color=0xFF0000
+                ),
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.send_message(
             embed=create_embed(
@@ -315,10 +331,14 @@ class Scheduling(commands.Cog):
                 continue
 
             if post["id"].startswith("-"):
-                user = await self.bot.get_or_fetch_user(post["author_id"])
+                user = await self.bot.get_or_fetch(discord.User, post["author_id"])
                 channel = user
             else:
                 channel = self.bot.get_channel(post["channel_id"])
+
+            if not channel:
+                logger.error("Trying to schedule %s failed: Channel or User not found.", post["id"])
+                continue
 
             self.scheduled_tasks[post["id"]] = self._create_schedule_task(
                 wait_seconds=wait_seconds,
@@ -335,10 +355,17 @@ class Scheduling(commands.Cog):
 
         self._persist_posts()
 
-    async def create_scheduled_post(self, args: ScheduledPostArgs) -> str:
-        """Create and schedule a message or reminder and return its id."""
+    async def create_scheduled_post(self, args: ScheduledPostArgs) -> str | None:
+        """Create and schedule a message or reminder and return its id; or None if failed."""
         now = datetime.now(LOCAL_TZ)
         task_id = args.task_id or self._generate_task_id(now, is_reminder=args.is_reminder)
+
+        channel = (
+            args.is_reminder and await self.bot.get_or_fetch(discord.User, args.author_id)
+        ) or self.bot.get_channel(args.channel_id)
+        if not channel:
+            logger.error("Trying to schedule %s failed: Channel or User not found.", task_id)
+            return None
 
         self.scheduled_posts.append(
             {
@@ -358,8 +385,7 @@ class Scheduling(commands.Cog):
         self.scheduled_tasks[task_id] = self._create_schedule_task(
             wait_seconds=self._get_wait_seconds(args.post_at),
             task_id=task_id,
-            channel=(args.is_reminder and await self.bot.get_or_fetch_user(args.author_id))
-            or self.bot.get_channel(args.channel_id),
+            channel=channel,
             content=args.content,
             attachments=args.attachment_paths,
             publish=args.publish,
@@ -374,7 +400,7 @@ class Scheduling(commands.Cog):
 
         return task_id
 
-    async def create_reminder(self, args: ScheduledPostArgs) -> str:
+    async def create_reminder(self, args: ScheduledPostArgs) -> str | None:
         """Convenience wrapper to schedule a user DM reminder; returns task id."""
         return await self.create_scheduled_post(args)
 
@@ -408,7 +434,7 @@ class Scheduling(commands.Cog):
         default=False,
     )
     @commands.guild_only()
-    async def schedule_post(
+    async def schedule_post(  # noqa: C901
         self,
         ctx: discord.ApplicationContext,
         channel: discord.abc.GuildChannel,
@@ -425,9 +451,16 @@ class Scheduling(commands.Cog):
         if (dt := await self.validate_date_and_respond(date, ctx.response)) is None:
             return
 
+        if ctx.channel_id is None:
+            await ctx.respond(
+                embed=create_embed(description="Failed to schedule post. Please try again later.", color=0xFF0000)
+            )
+            logger.error("Context channel ID is None in schedule_post command.")
+            return
+
         if post_id:
             try:
-                to_schedule = await ctx.channel.fetch_message(int(post_id))
+                to_schedule = await cast("discord.TextChannel", ctx.channel).fetch_message(int(post_id))
             except discord.NotFound:
                 await ctx.respond(
                     embed=create_embed(
@@ -444,7 +477,7 @@ class Scheduling(commands.Cog):
                 logger.exception("Error fetching the message to schedule via id")
                 return
         else:
-            async for message in ctx.channel.history(limit=10):
+            async for message in cast("discord.TextChannel", ctx.channel).history(limit=10):
                 if message.author == ctx.author:
                     to_schedule = message
                     break
@@ -481,7 +514,11 @@ class Scheduling(commands.Cog):
             is_reminder=False,
         )
 
-        await self.create_scheduled_post(args)
+        if await self.create_scheduled_post(args) is None:
+            await ctx.respond(
+                embed=create_embed(description="Failed to schedule the post, please try again later.", color=0xFF0000)
+            )
+            return
 
         await ctx.respond(
             embed=create_embed(
@@ -601,7 +638,7 @@ class Scheduling(commands.Cog):
             post["channel_id"] = channel.id
 
         if message_id:
-            message = await ctx.channel.fetch_message(int(message_id))
+            message = await cast("discord.TextChannel", ctx.channel).fetch_message(int(message_id))
             attachment_paths = []
             for i, attachment in enumerate(message.attachments):
                 filename = f"attachments/{post_id}_{i}_{attachment.filename}"
