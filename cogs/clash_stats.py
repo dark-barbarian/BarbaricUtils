@@ -80,9 +80,9 @@ class ClashStats(commands.Cog):
         """Autocomplete handler for configured page categories."""
         return list(self.pages_with_manual_entries.keys())
 
-    async def _autocomplete_page_observer_names(self, ctx: discord.AutocompleteContext) -> list[str]:
+    async def _autocomplete_page_observer_names(self, ctx: discord.AutocompleteContext) -> list[str]:  # noqa: C901
         """Autocomplete handler for page observer names with pagination."""
-        user_input = ctx.value.removeprefix("[KATEGORIE] ").split("(Seite")[0].strip()
+        user_input = ctx.value.removeprefix("[KATEGORIE] ").removeprefix("◀ ").split("(Seite")[0].strip()
 
         def check(page: str) -> bool:
             return page.lower().startswith(user_input.lower())
@@ -92,9 +92,11 @@ class ClashStats(commands.Cog):
         if user_input in self.pages_with_manual_entries:
             result = list(self.pages_with_manual_entries[user_input])
         else:
-            result = [
-                page for pages in self.pages_with_manual_entries.values() for page in pages if check(page)
-            ]  # populate result array while applying filter
+            result = [page for pages in self.pages_with_manual_entries.values() for page in pages if check(page)]
+            # for pages in self.pages_with_manual_entries.values():
+            #     for page in pages:
+            #         if check(page):
+            #             result.append(page)  # noqa: ERA001
 
         def get_page_number(ctx_value: str) -> int | None:
             number = re.search(r"\(Seite (\d+)\)", ctx_value)
@@ -103,20 +105,43 @@ class ClashStats(commands.Cog):
             return None
 
         # pagination logic, if more than 25 entries
-        if "▶" in ctx.value:  # if there is no '▶' we don't need to do the regex and can directly set 1 as page number
+        if any(
+            c in ctx.value for c in ["▶", "◀"]
+        ):  # if there is no '▶' or '◀' we don't need to do the regex and can directly set 1 as page number
             page_number = get_page_number(ctx.value) or 1
         else:
             page_number = 1
 
-        if len(result) > ((page_number - 1) * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1) + NUMBER_OF_AUTOCOMPLETE_RESULTS):
-            result = result[
-                (page_number - 1)
-                * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1) : page_number
-                * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1)
-            ]
-            result.append(f"{user_input} (Seite {page_number + 1}) ▶")
+        # count number of pages we need
+        pages = 1
+        if len(result) > (NUMBER_OF_AUTOCOMPLETE_RESULTS):
+            entries = len(result) - (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1)
+            while entries > (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1):
+                entries -= NUMBER_OF_AUTOCOMPLETE_RESULTS - 2
+                pages += 1
+            pages += 1
+
+        if pages == 1:
             return result
-        return result[(page_number - 1) * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1) :]
+
+        if page_number == 1:
+            return [*result[: NUMBER_OF_AUTOCOMPLETE_RESULTS - 1], f"{user_input} (Seite 2) ▶"]
+        if page_number == pages:
+            return [
+                f"◀ {user_input} (Seite {page_number - 1})",
+                *result[
+                    (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1) + (page_number - 2) * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 2) :
+                ],
+            ]
+        return [
+            f"◀ {user_input} (Seite {page_number - 1})",
+            *result[
+                (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1)
+                + (page_number - 2) * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 2) : (NUMBER_OF_AUTOCOMPLETE_RESULTS - 1)
+                + (page_number - 1) * (NUMBER_OF_AUTOCOMPLETE_RESULTS - 2)
+            ],
+            f"{user_input} (Seite {page_number + 1}) ▶",
+        ]
 
     def _find_dict_by_target(self, to_search: dict, to_find: str) -> tuple[str, dict]:
         """Find a dict entry by its 'Name' field, returning the key and value dict."""
@@ -370,8 +395,7 @@ class ClashStats(commands.Cog):
         """Add a page under a category to observe for manual updates."""
         observable_pages = self.pages_with_manual_entries
 
-        # TODO: eingefügte seiten werden nicht alphabetisch einsortiert
-        bisect.insort(observable_pages.setdefault(category, []), name)
+        bisect.insort(observable_pages.setdefault(category, []), name, key=str.lower)
         self.pages_with_manual_entries = {
             key: observable_pages[key] for key in sorted(observable_pages.keys(), key=str.lower)
         }
