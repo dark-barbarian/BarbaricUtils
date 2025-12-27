@@ -1,4 +1,7 @@
-- `pip install -U py-cord`
 - `pip install git+https://github.com/SirAnthony/slpp`
-- `pip install requests`
-- `pip install psutil`
+
+## After installing pre-commit via pip
+- `pre-commit install` (run once)
+
+## Run pre-commit hooks manually
+- `pre-commit run --all-files`
