@@ -37,15 +37,6 @@ MEMORY_INTERVAL_HOURS = 12  # must be 0 < h <= 24
 RESTART_ARGS_MIN = 3  # require at least [script, channel_id, message_id]
 
 
-# TODO: convert to reaction emojis
-async def cancel(ctx: discord.ApplicationContext, content: str) -> bool:
-    """Return True and send a confirmation if content equals 'cancel'."""
-    if content.lower() == "cancel":
-        await ctx.send(embed=create_embed(description="Cancelled current action.", color=0x00FF00))
-        return True
-    return False
-
-
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: discord.DiscordException) -> None:
     """Handle application command errors with user-friendly responses."""
@@ -170,5 +161,4 @@ if __name__ == "__main__":
         logger.exception("Fatal error in outer run loop!")
         sys.exit(1)
 
-# TODO: implement scheduling stuff (wiki), add command: list observed/manual pages, make deletions use autocomplete
-# when removing reminders or posts, pull up an autocomplete menu to delete it without having to enter the id
+# TODO: implement scheduling stuff (wiki), add command: list observed/manual pages

@@ -12,7 +12,7 @@ from typing import Any, cast
 import anyio
 import discord
 import requests
-from discord import HTTPException, option
+from discord import HTTPException, SlashCommandGroup, option
 from discord.ext import commands
 from slpp import slpp as lua
 
@@ -43,6 +43,10 @@ LEVEL_KEYS = [
 
 class ClashStats(commands.Cog):
     """Cog to work with stats around Clash of Clans."""
+
+    wiki = SlashCommandGroup("wiki", "Commands to do wiki-related operations")
+    additions = wiki.create_subgroup("add", "Commands to add items to lists")
+    removals = wiki.create_subgroup("remove", "Commands to remove items from lists")
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -259,7 +263,7 @@ class ClashStats(commands.Cog):
             return cast("dict", stats)[name][stat][level - 1]
         return cast("dict", stats)[name][stat]
 
-    @commands.slash_command(name="wikiupdate", description="Update the wiki with CSV data")
+    @wiki.command(name="update", description="Update the wiki with CSV data")
     @option("module", description="The module you want to update", input_type=str)
     @option(
         "wiki",
@@ -333,8 +337,8 @@ class ClashStats(commands.Cog):
         else:
             await ctx.respond(embed=create_embed(description="Something went wrong!", color=0xFF0000), ephemeral=True)
 
-    @commands.slash_command(
-        name="add_module", description="Adds a new module name to the module selection list (duplicates are ignored)"
+    @additions.command(
+        name="module", description="Adds a new module name to the module selection list (duplicates are ignored)"
     )
     @option("name", description="The name of the module you want to add", input_type=str)
     @commands.is_owner()
@@ -360,7 +364,7 @@ class ClashStats(commands.Cog):
 
         await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
 
-    @commands.slash_command(name="remove_module", description="Removes a module name from the module selection list")
+    @removals.command(name="module", description="Removes a module name from the module selection list")
     @option("name", description="The name of the module you want to remove", input_type=str)
     @commands.is_owner()
     async def remove_module(self, ctx: discord.ApplicationContext, name: str) -> None:
@@ -385,9 +389,7 @@ class ClashStats(commands.Cog):
 
         await ctx.respond(embed=create_embed(description="Removed the module name!", color=0x00FF00))
 
-    @commands.slash_command(
-        name="add_observable_page", description="Adds a new page to be warned about when updating the wiki data"
-    )
+    @additions.command(name="page", description="Adds a new page to be warned about when updating the wiki data")
     @option("category", description="The category this page belongs to (is created if not listed)", input_type=str)
     @option("name", description="The name of the page you want to be observed", input_type=str)
     @commands.is_owner()
@@ -414,8 +416,8 @@ class ClashStats(commands.Cog):
 
         await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
 
-    @commands.slash_command(
-        name="remove_observable_page",
+    @removals.command(
+        name="page",
         description="Removes a page or category from the observer list (does nothing if name doesn't exist)",
     )
     @option(

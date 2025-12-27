@@ -8,6 +8,7 @@ import requests
 from discord import option
 from discord.ext import commands, tasks
 
+from cogs.clash_stats import ClashStats
 from utils.bot_utils import LOCAL_TZ, create_embed
 
 logger = logging.getLogger(__name__)
@@ -107,8 +108,8 @@ class PageErrorReminders(commands.Cog):
             logger.exception("Error fetching category members from %s", wiki)
             return None
 
-    @commands.slash_command(
-        name="update_alowed_errors",
+    @ClashStats.wiki.command(
+        name="errors",
         description="Updates the amount of errors the category report may yield without notifying a certain someone",
     )
     @option(

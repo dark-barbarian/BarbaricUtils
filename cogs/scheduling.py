@@ -4,14 +4,13 @@ import json
 import logging
 import re
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import discord
-from discord import option
+from discord import SlashCommandGroup, option
 from discord.ext import commands
 
 from utils.bot_utils import LOCAL_TZ, create_embed, create_task_with_logging
@@ -22,21 +21,20 @@ EXAMPLE_DATE_FORMAT = (datetime.now(LOCAL_TZ) + timedelta(days=3)).strftime("%d.
 SCHEDULED_POSTS_FILE_PATH = "./persistent/scheduled_posts.json"
 
 
-@dataclass
-class ScheduledPostArgs:
+class ScheduledPostReminder(TypedDict):
     """Container for all fields needed to schedule a post or reminder."""
 
+    task_id: str
     author_id: int
     guild_id: int | None
     channel_id: int
     message_id: int
     channel_id_source: int
     content: str
-    post_at: datetime
+    post_at_iso: str
     attachment_paths: list[str]
     publish: bool
-    task_id: str = ""
-    is_reminder: bool = False
+    is_reminder: bool
 
 
 class RemindMeSelect(discord.ui.Select):
@@ -59,6 +57,17 @@ class RemindMeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Handle selection and create the corresponding reminder."""
+        if interaction.channel_id is None:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    description="Failed to create the reminder. Make sure to use this command in a valid channel.",
+                    color=0xFF0000,
+                ),
+                ephemeral=True,
+            )
+            logger.error("Interaction channel ID is None in RemindMeSelect.")
+            return
+
         chosen = cast("str", self.values[0])
 
         if chosen == "Other":
@@ -76,24 +85,27 @@ class RemindMeSelect(discord.ui.Select):
         else:
             remind_at = now + timedelta(minutes=1)
 
-        args = ScheduledPostArgs(
-            author_id=interaction.user.id,  # type: ignore[arg-type]
-            guild_id=interaction.guild_id,
-            channel_id=interaction.user.id,  # type: ignore[arg-type] # DM
-            message_id=self.message.id,
-            channel_id_source=interaction.channel_id,  # type: ignore[arg-type]
-            content=(
+        remind_at = remind_at.replace(second=0, microsecond=0)
+
+        reminder: ScheduledPostReminder = {
+            "task_id": "",
+            "author_id": interaction.user.id if interaction.user else 0,
+            "guild_id": interaction.guild_id,
+            "channel_id": interaction.user.id if interaction.user else 0,  # DM
+            "message_id": self.message.id,
+            "channel_id_source": interaction.channel_id,
+            "content": (
                 f"Here's your reminder about "
                 f"https://discord.com/channels/{interaction.guild_id or '@me'}/"
                 f"{interaction.channel_id}/{self.message.id}"
             ),
-            post_at=remind_at,
-            attachment_paths=[],
-            publish=False,
-            is_reminder=True,
-        )
+            "post_at_iso": remind_at.isoformat(),
+            "attachment_paths": [],
+            "publish": False,
+            "is_reminder": True,
+        }
 
-        task_id = await cast("Scheduling", self.bot.get_cog("Scheduling")).create_reminder(args)
+        task_id = await cast("Scheduling", self.bot.get_cog("Scheduling")).create_reminder(reminder)
         if task_id is None:
             await interaction.response.send_message(
                 embed=create_embed(
@@ -103,6 +115,7 @@ class RemindMeSelect(discord.ui.Select):
             )
             return
 
+        reminder["task_id"] = task_id
         await interaction.response.send_message(
             embed=create_embed(
                 description=f"`{task_id[1:]}`: Alright, I'll remind you about https://discord.com/channels/"
@@ -150,26 +163,38 @@ class CustomRemindModal(discord.ui.Modal):
         if (dt := await scheduling.validate_date_and_respond(date, interaction.response)) is None:
             return
 
+        if interaction.channel_id is None:
+            await interaction.response.send_message(
+                embed=create_embed(
+                    description="Failed to create the reminder. Make sure to use this command in a valid channel.",
+                    color=0xFF0000,
+                ),
+                ephemeral=True,
+            )
+            logger.error("Interaction channel ID is None in CustomRemindModal.")
+            return
+
         remind_at = dt.replace(second=0, microsecond=0)
 
-        args = ScheduledPostArgs(
-            author_id=interaction.user.id,  # type: ignore[arg-type]
-            guild_id=interaction.guild_id,
-            channel_id=interaction.user.id,  # type: ignore[arg-type] # DM
-            message_id=self.message.id,
-            channel_id_source=interaction.channel_id,  # type: ignore[arg-type]
-            content=(
+        reminder: ScheduledPostReminder = {
+            "task_id": "",
+            "author_id": interaction.user.id if interaction.user else 0,
+            "guild_id": interaction.guild_id,
+            "channel_id": interaction.user.id if interaction.user else 0,  # DM
+            "message_id": self.message.id,
+            "channel_id_source": interaction.channel_id,
+            "content": (
                 f"Here's your reminder about "
                 f"https://discord.com/channels/{interaction.guild_id or '@me'}/"
                 f"{interaction.channel_id}/{self.message.id}"
             ),
-            post_at=remind_at,
-            attachment_paths=[],
-            publish=False,
-            is_reminder=True,
-        )
+            "post_at_iso": remind_at.isoformat(),
+            "attachment_paths": [],
+            "publish": False,
+            "is_reminder": True,
+        }
 
-        task_id = await scheduling.create_reminder(args)
+        task_id = await scheduling.create_reminder(reminder)
         if task_id is None:
             await interaction.response.send_message(
                 embed=create_embed(
@@ -179,6 +204,7 @@ class CustomRemindModal(discord.ui.Modal):
             )
             return
 
+        reminder["task_id"] = task_id
         await interaction.response.send_message(
             embed=create_embed(
                 description=f"`{task_id[1:]}`: Alright, I'll remind you about https://discord.com/channels/"
@@ -193,14 +219,48 @@ class CustomRemindModal(discord.ui.Modal):
 class Scheduling(commands.Cog):
     """Schedules posts and manages reminders using background tasks."""
 
+    schedule = SlashCommandGroup("schedule", "Commands to manage scheduled posts")
+    reminder = SlashCommandGroup("reminder", "Commands to manage reminders")
+
     def __init__(self, bot: commands.Bot) -> None:
         """Initialize scheduling state and ensure attachment storage exists."""
         self.bot = bot
 
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
-        self.scheduled_posts: list[dict] = []
+        self.scheduled_posts: list[ScheduledPostReminder] = []
 
         Path("attachments").mkdir(parents=True, exist_ok=True)
+
+        for opt in cast("discord.SlashCommand", self.modify_scheduled_post).options:
+            if opt.name == "id":
+                opt.autocomplete = discord.utils.basic_autocomplete(self._autocomplete_post_ids)
+                break
+
+        for opt in cast("discord.SlashCommand", self.delete_scheduled_post).options:
+            if opt.name == "id":
+                opt.autocomplete = discord.utils.basic_autocomplete(self._autocomplete_post_ids)
+                break
+
+        for opt in cast("discord.SlashCommand", self.delete_reminder).options:
+            if opt.name == "id":
+                opt.autocomplete = discord.utils.basic_autocomplete(self._autocomplete_reminder_ids)
+                break
+
+    async def _autocomplete_post_ids(self, ctx: discord.AutocompleteContext) -> list[str]:
+        """Autocomplete handler for scheduled post ids."""
+        return [
+            post["task_id"]
+            for post in self.scheduled_posts
+            if self._validate_post(post, None, guild_id=ctx.interaction.guild_id, author=ctx.interaction.user)
+        ]
+
+    async def _autocomplete_reminder_ids(self, ctx: discord.AutocompleteContext) -> list[str]:
+        """Autocomplete handler for reminder ids."""
+        return [
+            reminder["task_id"][1:]
+            for reminder in self.scheduled_posts
+            if self._validate_reminder(reminder, author=ctx.interaction.user)
+        ]
 
     def _get_wait_seconds(self, dt: datetime) -> float:
         """Compute seconds to wait until `dt` in local timezone."""
@@ -235,22 +295,34 @@ class Scheduling(commands.Cog):
         finally:
             self._cleanup_schedule_remains(task_id, file_paths)
 
-    def _get_post_by_id(self, post_id: str) -> dict | None:
+    def _get_post_by_id(self, post_id: str) -> ScheduledPostReminder | None:
         """Retrieve a scheduled post/reminder by its id, if present."""
-        return next((d for d in self.scheduled_posts if d["id"] == post_id), None)
+        return next((d for d in self.scheduled_posts if d["task_id"] == post_id), None)
 
-    def _validate_post(self, ctx: discord.ApplicationContext, post: dict | None) -> bool:
+    def _validate_post(
+        self,
+        post: ScheduledPostReminder | None,
+        ctx: discord.ApplicationContext | None = None,
+        guild_id: int | None = None,
+        author: discord.User | discord.Member | None = None,
+    ) -> bool:
         """Check that the post belongs to the guild/author and is not a reminder."""
+        _guild_id = guild_id or (ctx.guild_id if ctx else None)
+        _author_id = author.id if author else (ctx.author.id if ctx else None)
         return not (
             post is None
-            or ctx.guild_id != post["guild_id"]
-            or ctx.author.id != post["author_id"]
-            or post["id"].startswith("-")
+            or _guild_id is None
+            or _guild_id != post["guild_id"]
+            or _author_id != post["author_id"]
+            or post["is_reminder"]
         )
 
-    def _validate_reminder(self, ctx: discord.ApplicationContext, post: dict | None) -> bool:
+    def _validate_reminder(
+        self, reminder: ScheduledPostReminder | None, author: discord.User | discord.Member | None
+    ) -> bool:
         """Check that the item is a reminder belonging to the author."""
-        return not (post is None or ctx.author.id != post["author_id"] or not post["id"].startswith("-"))
+        _author_id = author.id if author else None
+        return not (reminder is None or _author_id != reminder["author_id"] or not reminder["is_reminder"])
 
     def _generate_task_id(self, now: datetime, *, is_reminder: bool) -> str:
         """Generate a unique task id; reminders receive a leading '-' prefix."""
@@ -260,7 +332,7 @@ class Scheduling(commands.Cog):
         return (is_reminder and task_id) or task_id[1:]
 
     def _create_schedule_task(self, **kwargs: object) -> asyncio.Task:
-        func = partial(self._send_scheduled_message, publish=kwargs["publish"])  # type: ignore[arg-type]
+        func = partial(self._send_scheduled_message, publish=bool(kwargs["publish"]))
         return create_task_with_logging(
             self.bot.loop,
             self._schedule(
@@ -287,7 +359,7 @@ class Scheduling(commands.Cog):
 
     def _cleanup_schedule_remains(self, task_id: str, file_paths: list[str]) -> None:
         """Delete attachments and remove the scheduled item after execution."""
-        self.scheduled_posts = [post for post in self.scheduled_posts if post["id"] != task_id]
+        self.scheduled_posts = [post for post in self.scheduled_posts if post["task_id"] != task_id]
         self._delete_finished_tasks()
 
         for path in file_paths:
@@ -322,91 +394,77 @@ class Scheduling(commands.Cog):
 
         return dt
 
-    async def load_scheduled_posts(self, posts: list) -> None:
+    async def load_scheduled_posts(self, posts: list[ScheduledPostReminder]) -> None:
         """Restore scheduled tasks from a list of persisted posts and schedule them."""
         for post in posts:
-            wait_seconds = self._get_wait_seconds(datetime.fromisoformat(post["post_time"]))
+            wait_seconds = self._get_wait_seconds(datetime.fromisoformat(post["post_at_iso"]))
             if wait_seconds <= 0:
-                logger.info("Trying to schedule %s failed: Due date is in the past.", post["id"])
+                logger.info("Trying to schedule %s failed: Due date is in the past.", post["task_id"])
                 continue
 
-            if post["id"].startswith("-"):
+            if post["is_reminder"]:
                 user = await self.bot.get_or_fetch(discord.User, post["author_id"])
                 channel = user
             else:
                 channel = self.bot.get_channel(post["channel_id"])
-
             if not channel:
-                logger.error("Trying to schedule %s failed: Channel or User not found.", post["id"])
+                logger.error("Trying to schedule %s failed: Channel or User not found.", post["task_id"])
                 continue
 
-            self.scheduled_tasks[post["id"]] = self._create_schedule_task(
+            self.scheduled_tasks[post["task_id"]] = self._create_schedule_task(
                 wait_seconds=wait_seconds,
-                task_id=post["id"],
+                task_id=post["task_id"],
                 channel=channel,
                 content=post["content"],
-                attachments=post["attachments"],
+                attachments=post["attachment_paths"],
                 publish=post["publish"],
             )
 
             self.scheduled_posts.append(post)
 
-            logger.info("Scheduled %s for %s", post["id"], post["post_time"])
+            logger.info("Scheduled %s for %s", post["task_id"], datetime.fromisoformat(post["post_at_iso"]))
 
         self._persist_posts()
 
-    async def create_scheduled_post(self, args: ScheduledPostArgs) -> str | None:
+    async def create_scheduled_post(self, post: ScheduledPostReminder) -> str | None:
         """Create and schedule a message or reminder and return its id; or None if failed."""
         now = datetime.now(LOCAL_TZ)
-        task_id = args.task_id or self._generate_task_id(now, is_reminder=args.is_reminder)
+        task_id = post["task_id"] or self._generate_task_id(now, is_reminder=post["is_reminder"])
 
         channel = (
-            args.is_reminder and await self.bot.get_or_fetch(discord.User, args.author_id)
-        ) or self.bot.get_channel(args.channel_id)
+            post["is_reminder"] and await self.bot.get_or_fetch(discord.User, post["author_id"])
+        ) or self.bot.get_channel(post["channel_id"])
         if not channel:
             logger.error("Trying to schedule %s failed: Channel or User not found.", task_id)
             return None
 
-        self.scheduled_posts.append(
-            {
-                "id": task_id,
-                "author_id": args.author_id,
-                "guild_id": args.guild_id,
-                "channel_id": args.channel_id,
-                "message_id": args.message_id,
-                "channel_id_source": args.channel_id_source,
-                "content": args.content,
-                "post_time": args.post_at.isoformat(),
-                "attachments": args.attachment_paths,
-                "publish": args.publish,
-            }
-        )
+        post["task_id"] = task_id
+
+        self.scheduled_posts.append(post)
 
         self.scheduled_tasks[task_id] = self._create_schedule_task(
-            wait_seconds=self._get_wait_seconds(args.post_at),
+            wait_seconds=self._get_wait_seconds(datetime.fromisoformat(post["post_at_iso"])),
             task_id=task_id,
             channel=channel,
-            content=args.content,
-            attachments=args.attachment_paths,
-            publish=args.publish,
+            content=post["content"],
+            attachments=post["attachment_paths"],
+            publish=post["publish"],
         )
 
         self._persist_posts()
 
-        if args.is_reminder:
-            logger.info("Reminder %s set for %s", task_id, args.post_at.isoformat())
+        if post["is_reminder"]:
+            logger.info("Reminder %s set for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
         else:
-            logger.info("Scheduled %s for %s", task_id, args.post_at.isoformat())
+            logger.info("Scheduled %s for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
 
         return task_id
 
-    async def create_reminder(self, args: ScheduledPostArgs) -> str | None:
+    async def create_reminder(self, reminder: ScheduledPostReminder) -> str | None:
         """Convenience wrapper to schedule a user DM reminder; returns task id."""
-        return await self.create_scheduled_post(args)
+        return await self.create_scheduled_post(reminder)
 
-    @commands.slash_command(
-        name="schedule_post", description="Schedules a Discord post (your last sent message in this channel)"
-    )
+    @schedule.command(name="post", description="Schedules a Discord post (your last sent message in this channel)")
     @option(
         "channel",
         description="Which channel to post the message in",
@@ -497,24 +555,24 @@ class Scheduling(commands.Cog):
         attachment_paths = []
         for i, attachment in enumerate(cast("discord.Message", to_schedule).attachments):
             filename = f"attachments/{task_id}_{i}_{attachment.filename}"
-            await attachment.save(filename)  # type: ignore[attr-defined]
+            await attachment.save(Path(filename))
             attachment_paths.append(filename)
 
-        args = ScheduledPostArgs(
-            author_id=ctx.author.id,
-            guild_id=ctx.guild_id,
-            channel_id=channel.id,
-            message_id=to_schedule.id,
-            channel_id_source=ctx.channel_id,
-            content=to_schedule.content,
-            post_at=dt,
-            attachment_paths=attachment_paths,
-            publish=publish,
-            task_id=task_id,
-            is_reminder=False,
-        )
+        post: ScheduledPostReminder = {
+            "task_id": task_id,
+            "author_id": ctx.author.id,
+            "guild_id": ctx.guild_id,
+            "channel_id": channel.id,
+            "message_id": to_schedule.id,
+            "channel_id_source": ctx.channel_id,
+            "content": to_schedule.content,
+            "post_at_iso": dt.isoformat(),
+            "attachment_paths": attachment_paths,
+            "publish": publish,
+            "is_reminder": False,
+        }
 
-        if await self.create_scheduled_post(args) is None:
+        if await self.create_scheduled_post(post) is None:
             await ctx.respond(
                 embed=create_embed(description="Failed to schedule the post, please try again later.", color=0xFF0000)
             )
@@ -533,18 +591,18 @@ class Scheduling(commands.Cog):
         )
 
     # TODO: handle too many scheduled posts
-    @commands.slash_command(name="list_scheduled_posts", description="Lists all scheduled posts")
+    @schedule.command(name="list", description="Lists all scheduled posts")
     @commands.guild_only()
     async def list_scheduled_posts(self, ctx: discord.ApplicationContext) -> None:
         """List scheduled posts for the current guild authored by the requester."""
         response = ""
         for post in self.scheduled_posts:
-            if not self._validate_post(ctx, post):
+            if not self._validate_post(post, ctx):
                 continue
             response += (
-                f"- `{post['id']}`: https://discord.com/channels/"
+                f"- `{post['task_id']}`: https://discord.com/channels/"
                 f"{post['guild_id']}/{post['channel_id_source']}/{post['message_id']} "
-                f"<t:{int(datetime.fromisoformat(post['post_time']).timestamp())}:R> in <#{post['channel_id']}>"
+                f"<t:{int(datetime.fromisoformat(post['post_at_iso']).timestamp())}:R> in <#{post['channel_id']}>"
                 f"{' (\u2060:mega:\u2060)' if post['publish'] else ''}\n"
             )
 
@@ -554,17 +612,17 @@ class Scheduling(commands.Cog):
             await ctx.respond(embed=create_embed(description=response))
 
     # TODO: handle too many scheduled reminders
-    @commands.slash_command(name="list_reminders", description="Lists all your reminders")
+    @reminder.command(name="list", description="Lists all your reminders")
     async def list_reminders(self, ctx: discord.ApplicationContext) -> None:
         """List reminders created by the requester."""
         response = ""
         for reminder in self.scheduled_posts:
-            if not self._validate_reminder(ctx, reminder):
+            if not self._validate_reminder(reminder, ctx.author):
                 continue
             response += (
-                f"- `{reminder['id'][1:]}`: https://discord.com/channels/"
-                f"{reminder.get('guild_id') or '@me'}/{reminder['channel_id_source']}/{reminder['message_id']} "
-                f"<t:{int(datetime.fromisoformat(reminder['post_time']).timestamp())}:R>\n"
+                f"- `{reminder['task_id'][1:]}`: https://discord.com/channels/"
+                f"{reminder['guild_id'] or '@me'}/{reminder['channel_id_source']}/{reminder['message_id']} "
+                f"<t:{int(datetime.fromisoformat(reminder['post_at_iso']).timestamp())}:R>\n"
             )
 
         if len(response) == 0:
@@ -572,7 +630,7 @@ class Scheduling(commands.Cog):
         else:
             await ctx.respond(embed=create_embed(description=response), ephemeral=True)
 
-    @commands.slash_command(name="modify_scheduled_post", description="Modifies a scheduled post")
+    @schedule.command(name="modify", description="Modifies a scheduled post")
     @option(
         "id",
         parameter_name="post_id",
@@ -618,7 +676,7 @@ class Scheduling(commands.Cog):
         """Modify attributes of a scheduled post by id."""
         post = self._get_post_by_id(post_id)
 
-        if not post or not self._validate_post(ctx, post):
+        if not post or not self._validate_post(post, ctx):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
 
@@ -632,7 +690,7 @@ class Scheduling(commands.Cog):
             if (dt := await self.validate_date_and_respond(date, ctx.response)) is None:
                 return
 
-            post["post_time"] = dt.isoformat()
+            post["post_at_iso"] = dt.isoformat()
 
         if channel:
             post["channel_id"] = channel.id
@@ -642,13 +700,23 @@ class Scheduling(commands.Cog):
             attachment_paths = []
             for i, attachment in enumerate(message.attachments):
                 filename = f"attachments/{post_id}_{i}_{attachment.filename}"
-                await attachment.save(filename)  # type: ignore[attr-defined]
+                await attachment.save(Path(filename))
                 attachment_paths.append(filename)
+
+            if ctx.channel_id is None:
+                await ctx.respond(
+                    embed=create_embed(
+                        description="Failed to modify post. Make sure to use this command in a valid channel.",
+                        color=0xFF0000,
+                    )
+                )
+                logger.error("Context channel ID is None in modify_scheduled_post command.")
+                return
 
             post["message_id"] = int(message_id)
             post["channel_id_source"] = ctx.channel_id
             post["content"] = message.content
-            post["attachments"] = attachment_paths
+            post["attachment_paths"] = attachment_paths
 
         if publish is not None:
             post["publish"] = publish
@@ -656,11 +724,11 @@ class Scheduling(commands.Cog):
         self.scheduled_tasks[post_id].cancel()
 
         self.scheduled_tasks[post_id] = self._create_schedule_task(
-            wait_seconds=self._get_wait_seconds(datetime.fromisoformat(post["post_time"])),
+            wait_seconds=self._get_wait_seconds(datetime.fromisoformat(post["post_at_iso"])),
             task_id=post_id,
             channel=channel or self.bot.get_channel(post["channel_id"]),
             content=post["content"],
-            attachments=post["attachments"],
+            attachments=post["attachment_paths"],
             publish=post["publish"],
         )
 
@@ -669,16 +737,16 @@ class Scheduling(commands.Cog):
         await ctx.respond(
             embed=create_embed(
                 description=(
-                    f"`{post['id']}`: Scheduled https://discord.com/channels/"
+                    f"`{post['task_id']}`: Scheduled https://discord.com/channels/"
                     f"{ctx.guild_id}/{post['channel_id_source']}/{post['message_id']} for "
-                    f"<t:{int(datetime.fromisoformat(post['post_time']).timestamp())}:F> in <#{post['channel_id']}>"
+                    f"<t:{int(datetime.fromisoformat(post['post_at_iso']).timestamp())}:F> in <#{post['channel_id']}>"
                     f"{' (\u2060:mega:\u2060)' if post['publish'] else ''}"
                 ),
                 color=0x00FF00,
             )
         )
 
-    @commands.slash_command(name="delete_scheduled_post", description="Deletes a scheduled post")
+    @schedule.command(name="delete", description="Deletes a scheduled post")
     @option(
         "id",
         parameter_name="post_id",
@@ -690,28 +758,28 @@ class Scheduling(commands.Cog):
     async def delete_scheduled_post(self, ctx: discord.ApplicationContext, post_id: str) -> None:
         """Delete a scheduled post by id."""
         post = self._get_post_by_id(post_id)
-        if not post or not self._validate_post(ctx, post):
+        if not post or not self._validate_post(post, ctx):
             await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
             return
 
         self.scheduled_tasks[post_id].cancel()
-        self._cleanup_schedule_remains(post_id, post["attachments"])
+        self._cleanup_schedule_remains(post_id, post["attachment_paths"])
 
         await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
 
-    @commands.slash_command(name="delete_reminder", description="Deletes a reminder")
+    @reminder.command(name="delete", description="Deletes a reminder")
     @option("id", parameter_name="reminder_id", description="The reminder's id", input_type=str, required=True)
     async def delete_reminder(self, ctx: discord.ApplicationContext, reminder_id: str) -> None:
         """Delete a scheduled reminder by id."""
         reminder_id = "-" + reminder_id
         reminder = self._get_post_by_id(reminder_id)
 
-        if not reminder or not self._validate_reminder(ctx, reminder):
+        if not reminder or not self._validate_reminder(reminder, ctx.author):
             await ctx.respond(embed=create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000))
             return
 
         self.scheduled_tasks[reminder_id].cancel()
-        self._cleanup_schedule_remains(reminder_id, reminder["attachments"])
+        self._cleanup_schedule_remains(reminder_id, reminder["attachment_paths"])
 
         await ctx.respond(embed=create_embed(description="Deleted reminder successfully.", color=0x00FF00))
 
