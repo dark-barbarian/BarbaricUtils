@@ -5,10 +5,9 @@ from datetime import datetime, time
 
 import discord
 import requests
-from discord import option
+from discord import SlashCommandGroup, option
 from discord.ext import commands, tasks
 
-from cogs.clash_stats import ClashStats
 from utils.bot_utils import LOCAL_TZ, create_embed
 
 logger = logging.getLogger(__name__)
@@ -18,6 +17,9 @@ WEEKDAY_SATURDAY = 5
 
 class PageErrorReminders(commands.Cog):
     """Cog to report category pages with errors across configured wikis."""
+
+    reports = SlashCommandGroup("reports", "Commands related to category reports")
+    update = reports.create_subgroup("update", "Commands to update report settings")
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -108,7 +110,7 @@ class PageErrorReminders(commands.Cog):
             logger.exception("Error fetching category members from %s", wiki)
             return None
 
-    @ClashStats.wiki.command(
+    @update.command(
         name="errors",
         description="Updates the amount of errors the category report may yield without notifying a certain someone",
     )
