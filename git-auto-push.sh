@@ -6,6 +6,9 @@ BRANCH="main"
 REMOTE="origin"
 WATCH_DIR="persistent"
 
+BOT_NAME="github-actions[bot]"
+BOT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
 cd "$REPO_DIR"
 
 # Only run on the expected branch
@@ -34,7 +37,9 @@ fi
 git add "$WATCH_DIR"
 
 # Commit with bot author for this commit only
-git commit --author="github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
+GIT_COMMITTER_NAME="$BOT_NAME" \
+GIT_COMMITTER_EMAIL="$BOT_EMAIL" \
+git commit --author="$BOT_NAME <$BOT_EMAIL>" \
            -m "[automatic] Storing persistent data ($(date -I))"
 
 # Push
