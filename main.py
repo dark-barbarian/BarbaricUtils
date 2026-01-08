@@ -162,3 +162,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages, schedule_post deferren, wenn mehrere Bilder angehängt werden
+# delete reminder confirmation ephemaeral machen
