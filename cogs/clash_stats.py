@@ -166,8 +166,6 @@ class ClashStats(commands.Cog):
     def _update_wiki_stats(self, page: str, wiki: str) -> tuple[dict | bool, list[str]]:  # noqa: C901, PLR0912
         """Update a wiki data module from CSV and return the API result plus manual-update list."""
         # TODO: Revisit and refactor to reduce complexity; split into helpers
-        with Path(CSV_FILE_PATH).open() as f:
-            reader = csv.DictReader(f)
         result = {}
         update_manually = []
         current_key = ""
@@ -175,20 +173,24 @@ class ClashStats(commands.Cog):
         def flatten(xss: list[list[Any]]) -> list[Any]:
             return [x for xs in xss for x in xs]
 
-        for row in reader:
-            if all((item.lower() in ["string", "int", "boolean", ""]) for item in row.values()):
-                continue
+        with Path(CSV_FILE_PATH).open() as f:
+            reader = csv.DictReader(f)
 
-            for column, value in row.items():
-                if column == "Name" and value != "":
-                    current_key = value
-                    result.setdefault(value, {})
+            for row in reader:
+                if all((item.lower() in ["string", "int", "boolean", ""]) for item in row.values()):
+                    continue
 
-                result[current_key].setdefault(column, []).append(value)
+                for column, value in row.items():
+                    if column == "Name" and value != "":
+                        current_key = value
+                        result.setdefault(value, {})
+
+                    result[current_key].setdefault(column, []).append(value)
 
         # TODO: Armeelager (Bauarbeiterbasis) does not have levels in the CSV - they are manually added in the wiki.
         # Create an exception, so that if we are looking at Armeelager (Bauarbeiterbasis) in the CSV, it is skipped.
         # Should be possible by checking the len of the corresponding dict, Armeelager (Bauarbeiterbasis) has 1 row only
+        # TODO: Lösung für Skelett finden, das taucht mehrfach auf.
         for k, v in result.items():
             for k2 in list(v.keys()):
                 if self._remove_empty_values(v[k2])[0] == 0:
