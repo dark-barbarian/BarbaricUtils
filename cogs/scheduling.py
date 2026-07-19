@@ -252,7 +252,7 @@ class SchedulingModal(discord.ui.DesignerModal):
         }
         date: str = cast("discord.ui.InputText", labels[1].item).value or ""
         channel: discord.TextChannel = cast("list[Any]", cast("discord.ui.Select", labels[2].item).values)[0]
-        checkbox: bool = cast("discord.ui.Checkbox", labels[3].item).value or False
+        publish: bool = cast("discord.ui.Checkbox", labels[3].item).value or False
 
         scheduling = cast("Scheduling", self.bot.get_cog("Scheduling"))
         if (dt := await scheduling.validate_date_and_respond(date, interaction.response)) is None:
@@ -289,7 +289,7 @@ class SchedulingModal(discord.ui.DesignerModal):
             "content": self.message.content,
             "post_at_iso": schedule_at.isoformat(),
             "attachment_paths": attachment_paths,
-            "publish": checkbox,
+            "publish": publish,
             "is_reminder": False,
         }
 
@@ -305,7 +305,7 @@ class SchedulingModal(discord.ui.DesignerModal):
                     f"`{task_id}`: Scheduled https://discord.com/channels/"
                     f"{post.get('guild_id')}/{self.message.channel.id}/{self.message.id} for "
                     f"<t:{int(schedule_at.timestamp())}:F> in <#{channel.id}>"
-                    f"{' (\u2060:mega:\u2060)' if checkbox else ''}"
+                    f"{' (\u2060:mega:\u2060)' if publish else ''}"
                 ),
                 color=0x00FF00,
             )
