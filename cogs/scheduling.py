@@ -68,6 +68,11 @@ class RemindMeSelect(discord.ui.Select):
             logger.error("Interaction channel ID is None in RemindMeSelect.")
             return
 
+        if self.values is None or len(self.values) == 0:
+            await interaction.response.send_message(
+                embed=create_embed(description="No time selected for the reminder.", color=0xFF0000), ephemeral=True
+            )
+            return
         chosen = cast("str", self.values[0])
 
         if chosen == "Other":
@@ -214,6 +219,39 @@ class CustomRemindModal(discord.ui.Modal):
             ),
             ephemeral=True,
         )
+
+
+class SchedulingModal(discord.ui.DesignerModal):
+    """Modal to capture the input for scheduling a post."""
+
+    def __init__(self, bot: commands.Bot, message: discord.Message) -> None:
+        """Initialize the modal with the necessary fields."""
+        super().__init__(title="Scheduling...")
+        self.bot = bot
+        self.message = message
+
+        example_date = (datetime.now(LOCAL_TZ) + timedelta(days=2)).strftime("%d.%m. %H:%M")
+        self.add_item(
+            discord.ui.Label(
+                id=1,
+                label="Enter the date and time",
+                item=discord.ui.InputText(
+                    placeholder=example_date,
+                    value=example_date,
+                    style=discord.InputTextStyle.short,
+                ),
+            )
+        )
+        self.add_item(discord.ui.Label(id=2, label="Select the channel", item=discord.ui.ChannelSelect()))
+        self.add_item(discord.ui.Label(id=3, label="Publish after posting?", item=discord.ui.Checkbox(default=True)))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Validate the date, schedule the post, and respond."""
+        date = cast("discord.ui.Label", self.get_item(1)).item.value
+        channel = cast("discord.ui.Select", self.get_item(2).item).values[0]
+        checkbox = cast("discord.ui.Checkbox", self.get_item(3).item).value
+        print(self.children)
+        print(date, channel, checkbox)
 
 
 class Scheduling(commands.Cog):
@@ -464,7 +502,7 @@ class Scheduling(commands.Cog):
         """Convenience wrapper to schedule a user DM reminder; returns task id."""
         return await self.create_scheduled_post(reminder)
 
-    @schedule.command(name="post", description="Schedules a Discord post (your last sent message in this channel)")
+    # @commands.message_command(name="Schedule Post")
     @option(
         "channel",
         description="Which channel to post the message in",
@@ -478,13 +516,6 @@ class Scheduling(commands.Cog):
         required=True,
     )
     @option(
-        "id",
-        parameter_name="post_id",
-        description="The id of the message you want to schedule (only necessary if automatic fetch failed)",
-        input_type=str,
-        required=False,
-    )
-    @option(
         "publish",
         description="Whether or not to publish the message after it was posted",
         input_type=bool,
@@ -492,19 +523,17 @@ class Scheduling(commands.Cog):
         default=False,
     )
     @commands.guild_only()
-    async def schedule_post(  # noqa: C901
+    async def schedule_post(
         self,
         ctx: discord.ApplicationContext,
+        message: discord.Message,
         channel: discord.abc.GuildChannel,
         date: str,
-        post_id: str,
         *,
         publish: bool,
     ) -> None:
         """Slash command to schedule a message to be posted at a specific time."""
         self._delete_finished_tasks()
-
-        to_schedule = None
 
         if (dt := await self.validate_date_and_respond(date, ctx.response)) is None:
             return
@@ -516,44 +545,11 @@ class Scheduling(commands.Cog):
             logger.error("Context channel ID is None in schedule_post command.")
             return
 
-        if post_id:
-            try:
-                to_schedule = await cast("discord.TextChannel", ctx.channel).fetch_message(int(post_id))
-            except discord.NotFound:
-                await ctx.respond(
-                    embed=create_embed(
-                        description="Couldn't find the message, please check the id you provided.", color=0xFF0000
-                    )
-                )
-                return
-            except Exception:
-                await ctx.respond(
-                    embed=create_embed(
-                        description="Something went wrong fetching your message, please try again.", color=0xFF0000
-                    )
-                )
-                logger.exception("Error fetching the message to schedule via id")
-                return
-        else:
-            async for message in cast("discord.TextChannel", ctx.channel).history(limit=10):
-                if message.author == ctx.author:
-                    to_schedule = message
-                    break
-
-            if not to_schedule:
-                await ctx.respond(
-                    embed=create_embed(
-                        description="Failed to fetch your message automatically, please provide the message id.",
-                        color=0xFF0000,
-                    )
-                )
-                return
-
         now = datetime.now(LOCAL_TZ)
         task_id = self._generate_task_id(now, is_reminder=False)
 
         attachment_paths = []
-        for i, attachment in enumerate(cast("discord.Message", to_schedule).attachments):
+        for i, attachment in enumerate(message.attachments):
             filename = f"attachments/{task_id}_{i}_{attachment.filename}"
             await attachment.save(Path(filename))
             attachment_paths.append(filename)
@@ -563,9 +559,9 @@ class Scheduling(commands.Cog):
             "author_id": ctx.author.id,
             "guild_id": ctx.guild_id,
             "channel_id": channel.id,
-            "message_id": to_schedule.id,
+            "message_id": message.id,
             "channel_id_source": ctx.channel_id,
-            "content": to_schedule.content,
+            "content": message.content,
             "post_at_iso": dt.isoformat(),
             "attachment_paths": attachment_paths,
             "publish": publish,
@@ -582,7 +578,7 @@ class Scheduling(commands.Cog):
             embed=create_embed(
                 description=(
                     f"`{task_id}`: Scheduled https://discord.com/channels/"
-                    f"{ctx.guild_id}/{ctx.channel_id}/{to_schedule.id} for "
+                    f"{ctx.guild_id}/{ctx.channel_id}/{message.id} for "
                     f"<t:{int(dt.timestamp())}:F> in <#{channel.id}>"
                     f"{' (\u2060:mega:\u2060)' if publish else ''}"
                 ),
@@ -789,6 +785,12 @@ class Scheduling(commands.Cog):
         await ctx.respond(
             "Remind me about this message:", view=RemindSelectView(self.bot, message), ephemeral=True, delete_after=10
         )
+
+    @commands.message_command(name="Test")
+    async def test_command(self, ctx: discord.ApplicationContext, message: discord.Message) -> None:
+        """A test command to demonstrate functionality."""
+        # await ctx.respond(f"Test command received for message ID: {message.id}", ephemeral=True)
+        await ctx.send_modal(SchedulingModal(self.bot, message))
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
