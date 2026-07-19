@@ -164,3 +164,4 @@ if __name__ == "__main__":
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages,
 # schedule_post deferren, wenn mehrere Bilder angehängt werden
 # delete reminder confirmation ephemaeral machen
+# checken ob die persistent files vorher Path(/foo/bar.txt).parent.mkdir(exist_ok=True, parents=True) brauchen
