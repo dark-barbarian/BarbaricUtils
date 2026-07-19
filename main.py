@@ -108,6 +108,8 @@ async def on_ready() -> None:
                 clash_stats.data_module_names = list(
                     dict.fromkeys(sorted(json.loads(await file.read()), key=str.lower))
                 )
+        else:
+            Path(MODULE_LIST_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
 
         if Path(OBSERVABLE_PAGES_LIST_FILE_PATH).exists():
             async with await anyio.open_file(OBSERVABLE_PAGES_LIST_FILE_PATH, "r") as file:
@@ -115,10 +117,14 @@ async def on_ready() -> None:
                 sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
                 sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
                 clash_stats.pages_with_manual_entries = sorted_data
+        else:
+            Path(OBSERVABLE_PAGES_LIST_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
 
         if Path(SCHEDULED_POSTS_FILE_PATH).exists():
             async with await anyio.open_file(SCHEDULED_POSTS_FILE_PATH, "r") as file:
                 await scheduling.load_scheduled_posts(json.loads(await file.read()))
+        else:
+            Path(SCHEDULED_POSTS_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
     except (OSError, json.JSONDecodeError):
         logger.exception("Error when reading and initializing json files")
 
@@ -164,4 +170,3 @@ if __name__ == "__main__":
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages,
 # schedule_post deferren, wenn mehrere Bilder angehängt werden
 # delete reminder confirmation ephemaeral machen
-# checken ob die persistent files vorher Path(/foo/bar.txt).parent.mkdir(exist_ok=True, parents=True) brauchen
