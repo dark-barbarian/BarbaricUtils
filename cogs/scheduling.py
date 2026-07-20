@@ -273,6 +273,8 @@ class SchedulingModal(discord.ui.DesignerModal):
         now = datetime.now(LOCAL_TZ)
         task_id = scheduling.generate_task_id(now, is_reminder=False)
 
+        await interaction.response.defer(invisible=False)
+
         attachment_paths = []
         for i, attachment in enumerate(self.message.attachments):
             filename = f"attachments/{task_id}_{i}_{attachment.filename}"
@@ -294,12 +296,12 @@ class SchedulingModal(discord.ui.DesignerModal):
         }
 
         if await scheduling.create_scheduled_post(post) is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=create_embed(description="Failed to schedule the post, please try again later.", color=0xFF0000)
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=create_embed(
                 description=(
                     f"`{task_id}`: Scheduled https://discord.com/channels/"
@@ -745,13 +747,17 @@ class Scheduling(commands.Cog):
         reminder = self._get_post_by_id(reminder_id)
 
         if not reminder or not self._validate_reminder(reminder, ctx.author):
-            await ctx.respond(embed=create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000))
+            await ctx.respond(
+                embed=create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000), ephemeral=True
+            )
             return
 
         self.scheduled_tasks[reminder_id].cancel()
         self._cleanup_schedule_remains(reminder_id, reminder["attachment_paths"])
 
-        await ctx.respond(embed=create_embed(description="Deleted reminder successfully.", color=0x00FF00))
+        await ctx.respond(
+            embed=create_embed(description="Deleted reminder successfully.", color=0x00FF00), ephemeral=True
+        )
 
     @commands.message_command(name="Remind Me")
     async def remind_me(self, ctx: discord.ApplicationContext, message: discord.Message) -> None:
