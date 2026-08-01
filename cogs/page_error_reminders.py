@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 from datetime import datetime, time
 
 import discord
@@ -8,9 +7,7 @@ import requests
 from discord import SlashCommandGroup, option
 from discord.ext import commands, tasks
 
-from utils.bot_utils import LOCAL_TZ, create_embed
-
-logger = logging.getLogger(__name__)
+from utils.bot import LOCAL_TZ, Bot
 
 WEEKDAY_SATURDAY = 5
 
@@ -21,7 +18,7 @@ class PageErrorReminders(commands.Cog):
     reports = SlashCommandGroup("reports", "Commands related to category reports")
     update = reports.create_subgroup("update", "Commands to update report settings")
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
 
         self.channel_id = 1372252214814310651  # Clash of Clans Wiki -> #wiki-category-report
@@ -45,7 +42,7 @@ class PageErrorReminders(commands.Cog):
 
             message = f"# Category report for {wiki}\n"
             for category in categories:
-                logger.info("Checking category '%s' on wiki '%s'", category, wiki)
+                self.bot.logger.info("Checking category '%s' on wiki '%s'", category, wiki)
                 pages = self.fetch_category_members(wiki, category)
 
                 message = f"{message}- [{category}](<https://{wiki}/wiki/Kategorie:{category.replace(' ', '_')}>) - "
@@ -86,9 +83,9 @@ class PageErrorReminders(commands.Cog):
             if pages and "revisions" in pages[0]:
                 raw_content = pages[0]["revisions"][0]["slots"]["main"]["content"]
                 return json.loads(raw_content)
-            logger.error("No revisions or content found while fetching https://%s/wiki/%s", wiki, page_title)
+            self.bot.logger.error("No revisions or content found while fetching https://%s/wiki/%s", wiki, page_title)
         except Exception:
-            logger.exception("Error fetching or parsing JSON")
+            self.bot.logger.exception("Error fetching or parsing JSON")
 
     def fetch_category_members(self, wiki: str, category: str) -> list | None:
         """Fetch members of a category from the given wiki."""
@@ -107,7 +104,7 @@ class PageErrorReminders(commands.Cog):
             data = response.json()
             return data.get("query", {}).get("categorymembers", [])
         except Exception:
-            logger.exception("Error fetching category members from %s", wiki)
+            self.bot.logger.exception("Error fetching category members from %s", wiki)
             return None
 
     @update.command(
@@ -126,10 +123,10 @@ class PageErrorReminders(commands.Cog):
         self.wiki_categories["allowed_errors"] = value
 
         await ctx.respond(
-            embed=create_embed(description="Updated allowed errors in the category report!", color=0x00FF00)
+            embed=self.bot.create_embed(description="Updated allowed errors in the category report!", color=0x00FF00)
         )
 
 
-def setup(bot: commands.Bot) -> None:
+def setup(bot: Bot) -> None:
     """Register the `PageErrorReminders` cog with the bot."""
     bot.add_cog(PageErrorReminders(bot))

@@ -60,7 +60,8 @@ def fandom_login() -> None:
 
         AUTH_STATE.session_token = data["session_token"]
     except Exception:
-        logger.exception("An error occurred when logging into Fandom!")
+        if logger:
+            logger.exception("An error occurred when logging into Fandom!")
     finally:
         SEMAPHORE_AUTH.release()
 

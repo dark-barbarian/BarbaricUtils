@@ -1,9 +1,10 @@
+import contextlib
 import json
-import logging
 import os
 import sys
 import threading
 import time as _time
+from asyncio import AbstractEventLoop
 from datetime import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -15,21 +16,11 @@ from discord.ext import commands, tasks
 
 from cogs.clash_stats import MODULE_LIST_FILE_PATH, OBSERVABLE_PAGES_LIST_FILE_PATH, ClashStats
 from cogs.scheduling import SCHEDULED_POSTS_FILE_PATH, Scheduling
-from utils.bot_utils import LOCAL_TZ, create_embed
-from utils.botstate import bot_state
+from utils.bot import LOCAL_TZ, Bot
+from utils.exception_reporter import ExceptionReporter
 
 if TYPE_CHECKING:
     from cogs.page_error_reminders import PageErrorReminders
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)s]: %(message)s",
-    handlers=[logging.FileHandler("barbaricutils.log"), logging.StreamHandler()],
-)
-
-logger = logging.getLogger(__name__)
-
-bot = commands.Bot(owner_id=191530044491956224)
 
 
 BOT_REPORTS_CHANNEL_ID = 1403711339355963443
@@ -37,18 +28,35 @@ MEMORY_INTERVAL_HOURS = 12  # must be 0 < h <= 24
 RESTART_ARGS_MIN = 3  # require at least [script, channel_id, message_id]
 
 
+bot = Bot(owner_id=191530044491956224)
+
+
 @bot.event
 async def on_application_command_error(ctx: discord.ApplicationContext, error: discord.DiscordException) -> None:
     """Handle application command errors with user-friendly responses."""
     if isinstance(error, commands.NotOwner):
         await ctx.respond(
-            embed=create_embed(description="Sorry, only the bot owner can use this command!", color=0xFF0000),
+            embed=bot.create_embed(description="Sorry, only the bot owner can use this command!", color=0xFF0000),
             ephemeral=True,
         )
     elif isinstance(error, commands.NoPrivateMessage):
-        await ctx.respond(embed=create_embed(description="Sorry, this command can't be used in a DM!", color=0xFF0000))
+        await ctx.respond(
+            embed=bot.create_embed(description="Sorry, this command can't be used in a DM!", color=0xFF0000)
+        )
     else:
-        logger.error(error)
+        if isinstance(error, (commands.CommandNotFound, commands.MissingPermissions, commands.BadArgument)):
+            bot.logger.exception(error)
+            raise error
+
+        error = getattr(error, "original", error)
+
+        if bot.reporter:
+            await bot.reporter.report(
+                error,
+                context=(
+                    f"**Command:** `/{ctx.command}`\n**User:** {ctx.author} (`{ctx.author.id}`)\n**Guild:** {ctx.guild}"
+                ),
+            )
         raise error
 
 
@@ -64,25 +72,39 @@ async def memory_reporter(channel: discord.TextChannel, process: psutil.Process)
         await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
 
 
+def install_asyncio_handler(reporter: ExceptionReporter) -> None:
+    """Install a custom exception handler for the bot event loop to report exceptions."""
+
+    def handler(loop: AbstractEventLoop, context: dict) -> None:
+        exception = context.get("exception")
+
+        if exception is None:
+            exception = RuntimeError(context["message"])
+
+        loop.create_task(reporter.report(exception, context=context.get("message")))
+
+    bot.loop.set_exception_handler(handler)
+
+
 @tasks.loop(seconds=5)
 async def watchdog_ticker() -> None:
     """Update the watchdog timestamp every few seconds."""
-    bot_state.watchdog_last_tick = _time.time()
+    bot.watchdog_last_tick = _time.time()
 
 
 def watchdog(interval: int = 5, timeout: int = 15) -> None:
     """Kill the process if the event loop appears frozen for too long."""
     while True:
         _time.sleep(interval)
-        if _time.time() - bot_state.watchdog_last_tick > timeout:
-            logger.error("Bot appears frozen, killing the process...")
+        if _time.time() - bot.watchdog_last_tick > timeout:
+            bot.logger.error("Bot appears frozen, killing the process...")
             os._exit(1)
 
 
 @bot.slash_command(name="ping", description="Check the bot's latency")
 async def ping(ctx: discord.ApplicationContext) -> None:
     """Respond with the current bot latency in milliseconds."""
-    await ctx.respond(embed=create_embed("Latency", f"{round(bot.latency * 1000)} ms", color=0x000000))
+    await ctx.respond(embed=bot.create_embed("Latency", f"{round(bot.latency * 1000)} ms", color=0x000000))
 
 
 @bot.slash_command(name="restart", description="Restart the bot (owner only)")
@@ -126,11 +148,21 @@ async def on_ready() -> None:
         else:
             Path(SCHEDULED_POSTS_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
     except (OSError, json.JSONDecodeError):
-        logger.exception("Error when reading and initializing json files")
+        bot.logger.exception("Error when reading and initializing json files")
 
-    logger.info("Logged in as %s", bot.user)
+    bot.logger.info("Logged in as %s", bot.user)
     page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
-    memory_reporter.start(bot.get_channel(BOT_REPORTS_CHANNEL_ID), psutil.Process(os.getpid()))
+
+    reports_channel = bot.get_channel(BOT_REPORTS_CHANNEL_ID)
+    if reports_channel is None:
+        with contextlib.suppress(discord.errors.DiscordException):
+            reports_channel = await bot.fetch_channel(BOT_REPORTS_CHANNEL_ID)
+    if reports_channel is not None:
+        memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
+        bot.reporter = ExceptionReporter(bot, cast("discord.TextChannel", reports_channel))
+
+    if bot.reporter:
+        install_asyncio_handler(bot.reporter)
 
     watchdog_ticker.start()
     threading.Thread(target=watchdog, daemon=True).start()
@@ -160,11 +192,11 @@ if __name__ == "__main__":
     try:
         token = os.environ.get("DISCORD_TOKEN")
         if not token:
-            logger.error("DISCORD_TOKEN environment variable is not set. Exiting.")
+            bot.logger.error("DISCORD_TOKEN environment variable is not set. Exiting.")
             sys.exit(1)
         bot.run(token)
     except Exception:
-        logger.exception("Fatal error in outer run loop!")
+        bot.logger.exception("Fatal error in outer run loop!")
         sys.exit(1)
 
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages

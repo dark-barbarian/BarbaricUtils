@@ -1,8 +1,6 @@
 import bisect
-import csv
 import io
 import json
-import logging
 import os
 import re
 from contextlib import suppress
@@ -12,15 +10,13 @@ from typing import Any, cast
 import anyio
 import discord
 import requests
+from aiocsv import AsyncDictReader
 from discord import HTTPException, SlashCommandGroup, option
 from discord.ext import commands
 from slpp import slpp as lua
 
 from utils import wiki_operations
-from utils.bot_utils import create_embed
-from utils.botstate import bot_state
-
-logger = logging.getLogger(__name__)
+from utils.bot import Bot
 
 CSV_FILE_PATH = "./stats.csv"
 MODULE_LIST_FILE_PATH = "./persistent/csvmodules.json"
@@ -48,7 +44,7 @@ class ClashStats(commands.Cog):
     additions = wiki.create_subgroup("add", "Commands to add items to lists")
     removals = wiki.create_subgroup("remove", "Commands to remove items from lists")
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.data_module_names = []
         self.pages_with_manual_entries: dict[str, list[str]] = {}
@@ -163,7 +159,7 @@ class ClashStats(commands.Cog):
 
         return len(filled_values), (filled_values[0] if len(filled_values) == 1 else filled_values)
 
-    def _update_wiki_stats(self, page: str, wiki: str) -> tuple[dict | bool, list[str]]:  # noqa: C901, PLR0912
+    async def _update_wiki_stats(self, page: str, wiki: str) -> tuple[dict | bool, list[str]]:  # noqa: C901, PLR0912
         """Update a wiki data module from CSV and return the API result plus manual-update list."""
         # TODO: Revisit and refactor to reduce complexity; split into helpers
         result = {}
@@ -173,10 +169,8 @@ class ClashStats(commands.Cog):
         def flatten(xss: list[list[Any]]) -> list[Any]:
             return [x for xs in xss for x in xs]
 
-        with Path(CSV_FILE_PATH).open() as f:
-            reader = csv.DictReader(f)
-
-            for row in reader:
+        async with await anyio.open_file(CSV_FILE_PATH, "r") as f:
+            async for row in AsyncDictReader(f):
                 if all((item.lower() in ["string", "int", "boolean", ""]) for item in row.values()):
                     continue
 
@@ -185,7 +179,14 @@ class ClashStats(commands.Cog):
                         current_key = value
                         result.setdefault(value, {})
 
-                    result[current_key].setdefault(column, []).append(value)
+                    try:
+                        result[current_key].setdefault(column, []).append(value)
+                    except KeyError as e:
+                        msg = f"CSV does not have a 'Name' value for row: {row}"
+                        self.bot.logger.exception(msg)
+                        if self.bot.reporter:
+                            await self.bot.reporter.report(e, context=msg)
+                        return False, []
 
         # TODO: Armeelager (Bauarbeiterbasis) does not have levels in the CSV - they are manually added in the wiki.
         # Create an exception, so that if we are looking at Armeelager (Bauarbeiterbasis) in the CSV, it is skipped.
@@ -215,7 +216,7 @@ class ClashStats(commands.Cog):
                     or (not v_before_level and not v_level and v_before != v)
                 ):
                     update_manually.append(k)
-                    logger.warning("Possibly manual update necessary: %s", k)
+                    self.bot.logger.warning("Possibly manual update necessary: %s", k)
             except TypeError:  # easiest solution to not break the bot if v isn't a dict
                 pass
 
@@ -234,13 +235,13 @@ class ClashStats(commands.Cog):
             cast("dict", in_wiki_version)[k] = v
 
         return (
-            bot_state.wikiops.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki),
+            self.bot.wikiops.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki),
             update_manually,
         )
 
     def _convert_from_lua(self, module: str, wiki: str) -> object:
         """Fetch a Lua data module from the wiki."""
-        content = bot_state.wikiops.get_contents(module, wiki)
+        content = self.bot.wikiops.get_contents(module, wiki)
         if content == "":
             return {}
         return lua.decode(content[6:])
@@ -254,7 +255,7 @@ class ClashStats(commands.Cog):
         }
 
         response = session.get("https://api.clashofclans.com/v1/labels/players?limit=50", headers=headers)
-        logger.debug("Clash API response: %s", response.json())
+        self.bot.logger.debug("Clash API response: %s", response.json())
 
     async def _clash_info(self, name: str, stat: str, level: int, module: str) -> object:
         """Return a specific stat value for a unit at the requested level."""
@@ -281,14 +282,17 @@ class ClashStats(commands.Cog):
         """Update wiki pages from a CSV attachment for the given module and wiki."""
         if file.content_type is None or not file.content_type.startswith("text/csv;"):
             await ctx.respond(
-                embed=create_embed(description="The file you uploaded doesn't seem to be a CSV file.", color=0xFF0000),
+                embed=self.bot.create_embed(
+                    description="The file you uploaded doesn't seem to be a CSV file.", color=0xFF0000
+                ),
                 ephemeral=True,
             )
             return
 
         if module not in self.data_module_names:
             await ctx.respond(
-                embed=create_embed(description="There is no module with this name!", color=0xFF0000), ephemeral=True
+                embed=self.bot.create_embed(description="There is no module with this name!", color=0xFF0000),
+                ephemeral=True,
             )
             return
 
@@ -301,18 +305,18 @@ class ClashStats(commands.Cog):
             await file.save(Path(CSV_FILE_PATH))
         except HTTPException:
             await ctx.respond(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Something went wrong upon uploading your file. Please try again.", color=0xFF0000
                 ),
                 ephemeral=True,
             )
-            logger.exception("Saving the attachment failed")
+            self.bot.logger.exception("Saving the attachment failed")
             return
 
-        data, update_manually = self._update_wiki_stats(module, wiki)
+        data, update_manually = await self._update_wiki_stats(module, wiki)
         if not data or not isinstance(data, dict):
             await ctx.respond(
-                embed=create_embed(description="Something went wrong. Please try again.", color=0xFF0000),
+                embed=self.bot.create_embed(description="Something went wrong. Please try again.", color=0xFF0000),
                 ephemeral=True,
             )
             return
@@ -323,21 +327,25 @@ class ClashStats(commands.Cog):
                 output_file_data = io.BytesIO("\n".join(sorted(update_manually, key=str.lower)).encode("utf-8"))
                 output_file = discord.File(fp=output_file_data, filename="pages.txt")
                 await ctx.respond(
-                    embed=create_embed(
+                    embed=self.bot.create_embed(
                         description="Added the data successfully, but some pages need to be updated manually!",
                         color=0x00FF00,
                     ),
                     file=output_file,
                 )
                 return
-            await ctx.respond(embed=create_embed(description="Added the data successfully!", color=0x00FF00))
+            await ctx.respond(embed=self.bot.create_embed(description="Added the data successfully!", color=0x00FF00))
         elif response == "error":
             await ctx.respond(
-                embed=create_embed(description="Something went wrong!", footer=data["error"]["code"], color=0xFF0000),
+                embed=self.bot.create_embed(
+                    description="Something went wrong!", footer=data["error"]["code"], color=0xFF0000
+                ),
                 ephemeral=True,
             )
         else:
-            await ctx.respond(embed=create_embed(description="Something went wrong!", color=0xFF0000), ephemeral=True)
+            await ctx.respond(
+                embed=self.bot.create_embed(description="Something went wrong!", color=0xFF0000), ephemeral=True
+            )
 
     @additions.command(
         name="module", description="Adds a new module name to the module selection list (duplicates are ignored)"
@@ -356,15 +364,15 @@ class ClashStats(commands.Cog):
             async with await anyio.open_file(MODULE_LIST_FILE_PATH, "w") as file:
                 await file.write(json.dumps(self.data_module_names, ensure_ascii=False, indent=4))
         except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to store module name to file")
+            self.bot.logger.exception("Failed to store module name to file")
             await ctx.respond(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Added the new name until next restart, but couldn't store it.", color=0xFF0000
                 )
             )
             return
 
-        await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
+        await ctx.respond(embed=self.bot.create_embed(description="Added the new name!", color=0x00FF00))
 
     @removals.command(name="module", description="Removes a module name from the module selection list")
     @option("name", description="The name of the module you want to remove", input_type=str)
@@ -374,22 +382,22 @@ class ClashStats(commands.Cog):
         try:
             self.data_module_names.remove(name)
         except ValueError:
-            await ctx.respond(embed=create_embed(description="This module does not exist!", color=0xFF0000))
+            await ctx.respond(embed=self.bot.create_embed(description="This module does not exist!", color=0xFF0000))
             return
 
         try:
             async with await anyio.open_file(MODULE_LIST_FILE_PATH, "w") as file:
                 await file.write(json.dumps(self.data_module_names, ensure_ascii=False, indent=4))
         except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to remove module name from file, file might be empty now")
+            self.bot.logger.exception("Failed to remove module name from file, file might be empty now")
             await ctx.respond(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Removed the new name until next restart, but saving failed.", color=0xFF0000
                 )
             )
             return
 
-        await ctx.respond(embed=create_embed(description="Removed the module name!", color=0x00FF00))
+        await ctx.respond(embed=self.bot.create_embed(description="Removed the module name!", color=0x00FF00))
 
     @additions.command(name="page", description="Adds a new page to be warned about when updating the wiki data")
     @option("category", description="The category this page belongs to (is created if not listed)", input_type=str)
@@ -408,15 +416,15 @@ class ClashStats(commands.Cog):
             async with await anyio.open_file(OBSERVABLE_PAGES_LIST_FILE_PATH, "w") as file:
                 await file.write(json.dumps(self.pages_with_manual_entries, ensure_ascii=False, indent=4))
         except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to store page name to file")
+            self.bot.logger.exception("Failed to store page name to file")
             await ctx.respond(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Added the new name until next restart, but couldn't store it.", color=0xFF0000
                 )
             )
             return
 
-        await ctx.respond(embed=create_embed(description="Added the new name!", color=0x00FF00))
+        await ctx.respond(embed=self.bot.create_embed(description="Added the new name!", color=0x00FF00))
 
     @removals.command(
         name="page",
@@ -442,24 +450,24 @@ class ClashStats(commands.Cog):
                 del observable_pages[key]
 
         if error_counter == len(observable_pages_keys):
-            await ctx.respond(embed=create_embed(description="Name doesn't exist!", color=0xFF0000))
+            await ctx.respond(embed=self.bot.create_embed(description="Name doesn't exist!", color=0xFF0000))
             return
 
         try:
             async with await anyio.open_file(OBSERVABLE_PAGES_LIST_FILE_PATH, "w") as file:
                 await file.write(json.dumps(observable_pages, ensure_ascii=False, indent=4))
         except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to remove page name from file, file might be empty now")
+            self.bot.logger.exception("Failed to remove page name from file, file might be empty now")
             await ctx.respond(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Removed the new name until next restart, but saving failed.", color=0xFF0000
                 )
             )
             return
 
-        await ctx.respond(embed=create_embed(description="Removed the page name!", color=0x00FF00))
+        await ctx.respond(embed=self.bot.create_embed(description="Removed the page name!", color=0x00FF00))
 
 
-def setup(bot: commands.Bot) -> None:
+def setup(bot: Bot) -> None:
     """Register the `ClashStats` cog with the bot."""
     bot.add_cog(ClashStats(bot))

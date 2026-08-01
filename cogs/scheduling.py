@@ -1,7 +1,6 @@
 import asyncio
 import inspect
 import json
-import logging
 import re
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
@@ -13,9 +12,7 @@ import discord
 from discord import SlashCommandGroup, option
 from discord.ext import commands
 
-from utils.bot_utils import LOCAL_TZ, create_embed, create_task_with_logging
-
-logger = logging.getLogger(__name__)
+from utils.bot import LOCAL_TZ, Bot
 
 EXAMPLE_DATE_FORMAT = (datetime.now(LOCAL_TZ) + timedelta(days=3)).strftime("%d.%m. %H:%M")
 SCHEDULED_POSTS_FILE_PATH = "./persistent/scheduled_posts.json"
@@ -40,7 +37,7 @@ class ScheduledPostReminder(TypedDict):
 class RemindMeSelect(discord.ui.Select):
     """Select component offering common reminder times."""
 
-    def __init__(self, bot: commands.Bot, message: discord.Message) -> None:
+    def __init__(self, bot: Bot, message: discord.Message) -> None:
         """Initialize the select with predefined options."""
         self.bot = bot
         self.message = message
@@ -59,18 +56,19 @@ class RemindMeSelect(discord.ui.Select):
         """Handle selection and create the corresponding reminder."""
         if interaction.channel_id is None:
             await interaction.response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Failed to create the reminder. Make sure to use this command in a valid channel.",
                     color=0xFF0000,
                 ),
                 ephemeral=True,
             )
-            logger.error("Interaction channel ID is None in RemindMeSelect.")
+            self.bot.logger.error("Interaction channel ID is None in RemindMeSelect.")
             return
 
         if self.values is None or len(self.values) == 0:
             await interaction.response.send_message(
-                embed=create_embed(description="No time selected for the reminder.", color=0xFF0000), ephemeral=True
+                embed=self.bot.create_embed(description="No time selected for the reminder.", color=0xFF0000),
+                ephemeral=True,
             )
             return
         chosen = cast("str", self.values[0])
@@ -113,7 +111,7 @@ class RemindMeSelect(discord.ui.Select):
         task_id = await cast("Scheduling", self.bot.get_cog("Scheduling")).create_reminder(reminder)
         if task_id is None:
             await interaction.response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Failed to create the reminder, please try again later.", color=0xFF0000
                 ),
                 ephemeral=True,
@@ -122,7 +120,7 @@ class RemindMeSelect(discord.ui.Select):
 
         reminder["task_id"] = task_id
         await interaction.response.send_message(
-            embed=create_embed(
+            embed=self.bot.create_embed(
                 description=f"`{task_id[1:]}`: Alright, I'll remind you about https://discord.com/channels/"
                 f"{interaction.guild_id or '@me'}/{interaction.channel_id}/"
                 f"{self.message.id} <t:{int(remind_at.timestamp())}:R>!",
@@ -135,7 +133,7 @@ class RemindMeSelect(discord.ui.Select):
 class RemindSelectView(discord.ui.View):
     """View containing the reminder time selector for the 'Remind Me' command."""
 
-    def __init__(self, bot: commands.Bot, message: discord.Message) -> None:
+    def __init__(self, bot: Bot, message: discord.Message) -> None:
         """Initialize the view with a `RemindMeSelect` control."""
         super().__init__()
         self.add_item(RemindMeSelect(bot, message))
@@ -144,7 +142,7 @@ class RemindSelectView(discord.ui.View):
 class CustomRemindModal(discord.ui.Modal):
     """Modal to capture a custom date/time for a reminder."""
 
-    def __init__(self, bot: commands.Bot, message: discord.Message) -> None:
+    def __init__(self, bot: Bot, message: discord.Message) -> None:
         """Initialize the modal with an input field for date/time."""
         super().__init__(title="Reminding you...")
         self.bot = bot
@@ -170,13 +168,13 @@ class CustomRemindModal(discord.ui.Modal):
 
         if interaction.channel_id is None:
             await interaction.response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Failed to create the reminder. Make sure to use this command in a valid channel.",
                     color=0xFF0000,
                 ),
                 ephemeral=True,
             )
-            logger.error("Interaction channel ID is None in CustomRemindModal.")
+            self.bot.logger.error("Interaction channel ID is None in CustomRemindModal.")
             return
 
         remind_at = dt.replace(second=0, microsecond=0)
@@ -202,7 +200,7 @@ class CustomRemindModal(discord.ui.Modal):
         task_id = await scheduling.create_reminder(reminder)
         if task_id is None:
             await interaction.response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Failed to create the reminder, please try again later.", color=0xFF0000
                 ),
                 ephemeral=True,
@@ -211,7 +209,7 @@ class CustomRemindModal(discord.ui.Modal):
 
         reminder["task_id"] = task_id
         await interaction.response.send_message(
-            embed=create_embed(
+            embed=self.bot.create_embed(
                 description=f"`{task_id[1:]}`: Alright, I'll remind you about https://discord.com/channels/"
                 f"{interaction.guild_id or '@me'}/{interaction.channel_id}/"
                 f"{self.message.id} <t:{int(remind_at.timestamp())}:R>!",
@@ -224,7 +222,7 @@ class CustomRemindModal(discord.ui.Modal):
 class SchedulingModal(discord.ui.DesignerModal):
     """Modal to capture the input for scheduling a post."""
 
-    def __init__(self, bot: commands.Bot, message: discord.Message) -> None:
+    def __init__(self, bot: Bot, message: discord.Message) -> None:
         """Initialize the modal with the necessary fields."""
         super().__init__(title="Scheduling...")
         self.bot = bot
@@ -260,13 +258,13 @@ class SchedulingModal(discord.ui.DesignerModal):
 
         if interaction.channel_id is None:
             await interaction.response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description="Failed to schedule the post. Make sure to use this command in a valid channel.",
                     color=0xFF0000,
                 ),
                 ephemeral=True,
             )
-            logger.error("Interaction channel ID is None in SchedulingModal.")
+            self.bot.logger.error("Interaction channel ID is None in SchedulingModal.")
             return
 
         schedule_at = dt.replace(second=0, microsecond=0)
@@ -297,12 +295,14 @@ class SchedulingModal(discord.ui.DesignerModal):
 
         if await scheduling.create_scheduled_post(post) is None:
             await interaction.followup.send(
-                embed=create_embed(description="Failed to schedule the post, please try again later.", color=0xFF0000)
+                embed=self.bot.create_embed(
+                    description="Failed to schedule the post, please try again later.", color=0xFF0000
+                )
             )
             return
 
         await interaction.followup.send(
-            embed=create_embed(
+            embed=self.bot.create_embed(
                 description=(
                     f"`{task_id}`: Scheduled https://discord.com/channels/"
                     f"{post.get('guild_id')}/{self.message.channel.id}/{self.message.id} for "
@@ -320,7 +320,7 @@ class Scheduling(commands.Cog):
     schedule = SlashCommandGroup("schedule", "Commands to manage scheduled posts")
     reminder = SlashCommandGroup("reminder", "Commands to manage reminders")
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         """Initialize scheduling state and ensure attachment storage exists."""
         self.bot = bot
 
@@ -370,7 +370,7 @@ class Scheduling(commands.Cog):
         """Sleep for the given time, then execute the task function."""
         await asyncio.sleep(wait_seconds)
 
-        logger.info("Finished waiting, posting %s now.", task_id)
+        self.bot.logger.info("Finished waiting, posting %s now.", task_id)
         result = what(task_id, *args)
         if inspect.isawaitable(result):
             await result
@@ -424,7 +424,7 @@ class Scheduling(commands.Cog):
 
     def _create_schedule_task(self, **kwargs: object) -> asyncio.Task:
         func = partial(self._send_scheduled_message, publish=bool(kwargs["publish"]))
-        return create_task_with_logging(
+        return self.bot.create_task_with_logging(
             self.bot.loop,
             self._schedule(
                 func,
@@ -446,7 +446,7 @@ class Scheduling(commands.Cog):
             with Path(SCHEDULED_POSTS_FILE_PATH).open("w") as file:
                 json.dump(self.scheduled_posts, file, indent=4)
         except (OSError, json.JSONDecodeError):
-            logger.exception("Failed to update scheduled posts file")
+            self.bot.logger.exception("Failed to update scheduled posts file")
 
     def _cleanup_schedule_remains(self, task_id: str, file_paths: list[str]) -> None:
         """Delete attachments and remove the scheduled item after execution."""
@@ -457,7 +457,7 @@ class Scheduling(commands.Cog):
             try:
                 Path(path).unlink(missing_ok=True)
             except Exception:
-                logger.exception("Failed to delete file")
+                self.bot.logger.exception("Failed to delete file")
 
         self._persist_posts()
 
@@ -483,7 +483,7 @@ class Scheduling(commands.Cog):
         except ValueError:
             example_date = (datetime.now(LOCAL_TZ) + timedelta(minutes=5)).strftime("%d.%m. %H:%M")
             await response.send_message(
-                embed=create_embed(
+                embed=self.bot.create_embed(
                     description=f"Please use the correct format for the date: `{example_date}`", color=0xFF0000
                 ),
                 ephemeral=True,
@@ -497,7 +497,7 @@ class Scheduling(commands.Cog):
         for post in posts:
             wait_seconds = self._get_wait_seconds(datetime.fromisoformat(post["post_at_iso"]))
             if wait_seconds <= 0:
-                logger.info("Trying to schedule %s failed: Due date is in the past.", post["task_id"])
+                self.bot.logger.info("Trying to schedule %s failed: Due date is in the past.", post["task_id"])
                 continue
 
             if post["is_reminder"]:
@@ -506,7 +506,7 @@ class Scheduling(commands.Cog):
             else:
                 channel = self.bot.get_channel(post["channel_id"])
             if not channel:
-                logger.error("Trying to schedule %s failed: Channel or User not found.", post["task_id"])
+                self.bot.logger.error("Trying to schedule %s failed: Channel or User not found.", post["task_id"])
                 continue
 
             self.scheduled_tasks[post["task_id"]] = self._create_schedule_task(
@@ -520,7 +520,7 @@ class Scheduling(commands.Cog):
 
             self.scheduled_posts.append(post)
 
-            logger.info("Scheduled %s for %s", post["task_id"], datetime.fromisoformat(post["post_at_iso"]))
+            self.bot.logger.info("Scheduled %s for %s", post["task_id"], datetime.fromisoformat(post["post_at_iso"]))
 
         self._persist_posts()
 
@@ -533,7 +533,7 @@ class Scheduling(commands.Cog):
             post["is_reminder"] and await self.bot.get_or_fetch(discord.User, post["author_id"])
         ) or self.bot.get_channel(post["channel_id"])
         if not channel:
-            logger.error("Trying to schedule %s failed: Channel or User not found.", task_id)
+            self.bot.logger.error("Trying to schedule %s failed: Channel or User not found.", task_id)
             return None
 
         post["task_id"] = task_id
@@ -552,9 +552,9 @@ class Scheduling(commands.Cog):
         self._persist_posts()
 
         if post["is_reminder"]:
-            logger.info("Reminder %s set for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
+            self.bot.logger.info("Reminder %s set for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
         else:
-            logger.info("Scheduled %s for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
+            self.bot.logger.info("Scheduled %s for %s", task_id, datetime.fromisoformat(post["post_at_iso"]))
 
         return task_id
 
@@ -579,9 +579,9 @@ class Scheduling(commands.Cog):
             )
 
         if len(response) == 0:
-            await ctx.respond(embed=create_embed(description="No posts have been scheduled."))
+            await ctx.respond(embed=self.bot.create_embed(description="No posts have been scheduled."))
         else:
-            await ctx.respond(embed=create_embed(description=response))
+            await ctx.respond(embed=self.bot.create_embed(description=response))
 
     # TODO: handle too many scheduled reminders
     @reminder.command(name="list", description="Lists all your reminders")
@@ -598,9 +598,9 @@ class Scheduling(commands.Cog):
             )
 
         if len(response) == 0:
-            await ctx.respond(embed=create_embed(description="You have no reminders."), ephemeral=True)
+            await ctx.respond(embed=self.bot.create_embed(description="You have no reminders."), ephemeral=True)
         else:
-            await ctx.respond(embed=create_embed(description=response), ephemeral=True)
+            await ctx.respond(embed=self.bot.create_embed(description=response), ephemeral=True)
 
     @schedule.command(name="modify", description="Modifies a scheduled post")
     @option(
@@ -649,12 +649,14 @@ class Scheduling(commands.Cog):
         post = self._get_post_by_id(post_id)
 
         if not post or not self._validate_post(post, ctx):
-            await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
+            await ctx.respond(
+                embed=self.bot.create_embed(description="Couldn't find post with this ID.", color=0xFF0000)
+            )
             return
 
         if not channel and not date and not message_id and not publish:
             await ctx.respond(
-                embed=create_embed(description="Please specify at least one value to update.", color=0xFF0000)
+                embed=self.bot.create_embed(description="Please specify at least one value to update.", color=0xFF0000)
             )
             return
 
@@ -677,12 +679,12 @@ class Scheduling(commands.Cog):
 
             if ctx.channel_id is None:
                 await ctx.respond(
-                    embed=create_embed(
+                    embed=self.bot.create_embed(
                         description="Failed to modify post. Make sure to use this command in a valid channel.",
                         color=0xFF0000,
                     )
                 )
-                logger.error("Context channel ID is None in modify_scheduled_post command.")
+                self.bot.logger.error("Context channel ID is None in modify_scheduled_post command.")
                 return
 
             post["message_id"] = int(message_id)
@@ -707,7 +709,7 @@ class Scheduling(commands.Cog):
         self._persist_posts()
 
         await ctx.respond(
-            embed=create_embed(
+            embed=self.bot.create_embed(
                 description=(
                     f"`{post['task_id']}`: Scheduled https://discord.com/channels/"
                     f"{ctx.guild_id}/{post['channel_id_source']}/{post['message_id']} for "
@@ -731,13 +733,17 @@ class Scheduling(commands.Cog):
         """Delete a scheduled post by id."""
         post = self._get_post_by_id(post_id)
         if not post or not self._validate_post(post, ctx):
-            await ctx.respond(embed=create_embed(description="Couldn't find post with this ID.", color=0xFF0000))
+            await ctx.respond(
+                embed=self.bot.create_embed(description="Couldn't find post with this ID.", color=0xFF0000)
+            )
             return
 
         self.scheduled_tasks[post_id].cancel()
         self._cleanup_schedule_remains(post_id, post["attachment_paths"])
 
-        await ctx.respond(embed=create_embed(description="Deleted scheduled post successfully.", color=0x00FF00))
+        await ctx.respond(
+            embed=self.bot.create_embed(description="Deleted scheduled post successfully.", color=0x00FF00)
+        )
 
     @reminder.command(name="delete", description="Deletes a reminder")
     @option("id", parameter_name="reminder_id", description="The reminder's id", input_type=str, required=True)
@@ -748,7 +754,8 @@ class Scheduling(commands.Cog):
 
         if not reminder or not self._validate_reminder(reminder, ctx.author):
             await ctx.respond(
-                embed=create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000), ephemeral=True
+                embed=self.bot.create_embed(description="Couldn't find reminder with this ID.", color=0xFF0000),
+                ephemeral=True,
             )
             return
 
@@ -756,7 +763,7 @@ class Scheduling(commands.Cog):
         self._cleanup_schedule_remains(reminder_id, reminder["attachment_paths"])
 
         await ctx.respond(
-            embed=create_embed(description="Deleted reminder successfully.", color=0x00FF00), ephemeral=True
+            embed=self.bot.create_embed(description="Deleted reminder successfully.", color=0x00FF00), ephemeral=True
         )
 
     @commands.message_command(name="Remind Me")
@@ -785,6 +792,6 @@ class Scheduling(commands.Cog):
         )
 
 
-def setup(bot: commands.Bot) -> None:
+def setup(bot: Bot) -> None:
     """Register the `Scheduling` cog with the bot."""
     bot.add_cog(Scheduling(bot))

@@ -1,3 +1,4 @@
+aiocsv==1.4.1
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.1
 aiosignal==1.4.0
