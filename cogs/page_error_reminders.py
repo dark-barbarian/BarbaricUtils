@@ -87,8 +87,8 @@ class PageErrorReminders(commands.Cog):
         except Exception as e:
             msg = f"Error fetching or parsing JSON from https://{wiki}/wiki/{page_title}"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
 
     async def fetch_category_members(self, wiki: str, category: str) -> list | None:
         """Fetch members of a category from the given wiki."""
@@ -109,8 +109,8 @@ class PageErrorReminders(commands.Cog):
         except Exception as e:
             msg = f"Error fetching category members from https://{wiki}/wiki/Category:{category}"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
             return None
 
     @update.command(

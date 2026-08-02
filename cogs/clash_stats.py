@@ -186,8 +186,8 @@ class ClashStats(commands.Cog):
                     except KeyError as e:
                         msg = f"CSV does not have a 'Name' value for row: {row}"
                         self.bot.logger.exception(msg)
-                        if self.bot.reporter:
-                            await self.bot.reporter.report(e, context=msg)
+                        if self.bot.exception_reporter:
+                            await self.bot.exception_reporter.report(e, context=msg)
                         return False, []
 
         # TODO: Armeelager (Bauarbeiterbasis) does not have levels in the CSV - they are manually added in the wiki.

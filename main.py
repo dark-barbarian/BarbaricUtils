@@ -3,32 +3,28 @@ import json
 import os
 import sys
 import threading
-import time as _time
-from asyncio import AbstractEventLoop
-from datetime import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import anyio
 import discord
 import psutil
-from discord.ext import commands, tasks
+from discord.ext import commands
 
 from cogs.clash_stats import MODULE_LIST_FILE_PATH, OBSERVABLE_PAGES_LIST_FILE_PATH, ClashStats
 from cogs.scheduling import SCHEDULED_POSTS_FILE_PATH, Scheduling
-from utils.bot import LOCAL_TZ, Bot
+from utils.bot import BOT_REPORTS_CHANNEL_ID, Bot
 from utils.exception_reporter import ExceptionReporter
 
 if TYPE_CHECKING:
     from cogs.page_error_reminders import PageErrorReminders
 
 
-BOT_REPORTS_CHANNEL_ID = 1403711339355963443
-MEMORY_INTERVAL_HOURS = 12  # must be 0 < h <= 24
+BOT_OWNER_ID = 191530044491956224
 RESTART_ARGS_MIN = 3  # require at least [script, channel_id, message_id]
 
 
-bot = Bot(owner_id=191530044491956224)
+bot = Bot(owner_id=BOT_OWNER_ID)
 
 
 @bot.event
@@ -50,55 +46,14 @@ async def on_application_command_error(ctx: discord.ApplicationContext, error: d
 
         error = getattr(error, "original", error)
 
-        if bot.reporter:
-            await bot.reporter.report(
+        if bot.exception_reporter:
+            await bot.exception_reporter.report(
                 error,
                 context=(
                     f"**Command:** `/{ctx.command}`\n**User:** {ctx.author} (`{ctx.author.id}`)\n**Guild:** {ctx.guild}"
                 ),
             )
         raise error
-
-
-@tasks.loop(
-    time=tuple(time(hour=(i * MEMORY_INTERVAL_HOURS) % 24, tzinfo=LOCAL_TZ) for i in range(24 // MEMORY_INTERVAL_HOURS))
-)
-async def memory_reporter(channel: discord.TextChannel, process: psutil.Process) -> None:
-    """Periodically report memory and CPU usage to the given channel."""
-    mem_mb = process.memory_info().rss / 1024 / 1024
-    total_mb = psutil.virtual_memory().total / 1024 / 1024
-    cpu_percent = process.cpu_percent(interval=None)
-    if channel:
-        await channel.send(f"🖥 Memory: {mem_mb:.2f} MB / {total_mb:.0f} MB | CPU: {cpu_percent:.1f}%")
-
-
-def install_asyncio_handler(reporter: ExceptionReporter) -> None:
-    """Install a custom exception handler for the bot event loop to report exceptions."""
-
-    def handler(loop: AbstractEventLoop, context: dict) -> None:
-        exception = context.get("exception")
-
-        if exception is None:
-            exception = RuntimeError(context["message"])
-
-        loop.create_task(reporter.report(exception, context=context.get("message")))
-
-    bot.loop.set_exception_handler(handler)
-
-
-@tasks.loop(seconds=5)
-async def watchdog_ticker() -> None:
-    """Update the watchdog timestamp every few seconds."""
-    bot.watchdog_last_tick = _time.time()
-
-
-def watchdog(interval: int = 5, timeout: int = 15) -> None:
-    """Kill the process if the event loop appears frozen for too long."""
-    while True:
-        _time.sleep(interval)
-        if _time.time() - bot.watchdog_last_tick > timeout:
-            bot.logger.error("Bot appears frozen, killing the process...")
-            os._exit(1)
 
 
 @bot.slash_command(name="ping", description="Check the bot's latency")
@@ -158,14 +113,14 @@ async def on_ready() -> None:
         with contextlib.suppress(discord.errors.DiscordException):
             reports_channel = await bot.fetch_channel(BOT_REPORTS_CHANNEL_ID)
     if reports_channel is not None:
-        memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
-        bot.reporter = ExceptionReporter(bot, cast("discord.TextChannel", reports_channel))
+        bot.memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
+        bot.exception_reporter = ExceptionReporter(bot, cast("discord.TextChannel", reports_channel))
 
-    if bot.reporter:
-        install_asyncio_handler(bot.reporter)
+    if bot.exception_reporter:
+        bot.install_asyncio_handler(bot.exception_reporter)
 
-    watchdog_ticker.start()
-    threading.Thread(target=watchdog, daemon=True).start()
+    bot.watchdog_ticker.start()
+    threading.Thread(target=bot.watchdog, daemon=True).start()
 
     await bot.wait_until_ready()
     await cast("discord.TextChannel", bot.get_channel(BOT_REPORTS_CHANNEL_ID)).send(

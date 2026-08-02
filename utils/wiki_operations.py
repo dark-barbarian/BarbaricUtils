@@ -64,8 +64,8 @@ class WikiOperations:
         except Exception as e:
             msg = f"An error occurred when retrieving the page content for page '{page}'!"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
             return ""
         finally:
             self.semaphore.release()
@@ -102,8 +102,8 @@ class WikiOperations:
         except Exception as e:
             msg = f"An error occurred when editing the page '{page}'!"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
             return False
 
     async def move_page(self, old_name: str, new_name: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
@@ -127,8 +127,8 @@ class WikiOperations:
         except Exception as e:
             msg = f"An error occurred when moving the page '{old_name}' to '{new_name}'!"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
             return False
 
     async def upload_image(self, title: str, source_url: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
@@ -152,6 +152,6 @@ class WikiOperations:
         except Exception as e:
             msg = f"An error occurred when uploading the image '{title}'!"
             self.bot.logger.exception(msg)
-            if self.bot.reporter:
-                await self.bot.reporter.report(e, context=msg)
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(e, context=msg)
             return False
