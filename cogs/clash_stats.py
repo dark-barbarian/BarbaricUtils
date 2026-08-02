@@ -176,6 +176,8 @@ class ClashStats(commands.Cog):
 
                 for column, value in row.items():
                     if column == "Name" and value != "":
+                        if current_key == value:
+                            continue
                         current_key = value
                         result.setdefault(value, {})
 
