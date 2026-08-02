@@ -28,7 +28,7 @@ class Bot(commands.Bot):
     def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
         super().__init__(*args, **kwargs)
         self.watchdog_last_tick = 0.0
-        self.wikiops = wiki_operations.WikiOperations()
+        self.wikiops = wiki_operations.WikiOperations(self)
         self.reporter: ExceptionReporter | None = None
         self.logger = logging.getLogger(__name__)
 

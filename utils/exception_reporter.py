@@ -32,7 +32,7 @@ class ExceptionReporter:
         function = tb.tb_frame.f_code.co_name
         line = tb.tb_lineno
 
-        embed = self.bot.create_embed(title="🚨 Unhandled Exception", description=context, color=discord.Colour.red())
+        embed = self.bot.create_embed(title="🚨 Exception occurred", description=context, color=discord.Colour.red())
         embed.add_field(name="Type", value=f"`{type(exception).__name__}`", inline=True)
         embed.add_field(name="Location", value=f"`{filename}:{line}`", inline=True)
         embed.add_field(name="Function", value=f"`{function}()`", inline=True)

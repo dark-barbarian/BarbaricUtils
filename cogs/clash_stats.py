@@ -199,7 +199,7 @@ class ClashStats(commands.Cog):
                 else:
                     result[k][k2] = self._remove_empty_values(v[k2])[1]
 
-        in_wiki_version = self._convert_from_lua(page, wiki)
+        in_wiki_version = await self._convert_from_lua(page, wiki)
 
         # update existing entries
         for k, v in cast("dict", in_wiki_version).items():
@@ -235,13 +235,13 @@ class ClashStats(commands.Cog):
             cast("dict", in_wiki_version)[k] = v
 
         return (
-            self.bot.wikiops.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki),
+            await self.bot.wikiops.edit_page(page, "return " + lua.encode(in_wiki_version), bot=False, wiki=wiki),
             update_manually,
         )
 
-    def _convert_from_lua(self, module: str, wiki: str) -> object:
+    async def _convert_from_lua(self, module: str, wiki: str) -> object:
         """Fetch a Lua data module from the wiki."""
-        content = self.bot.wikiops.get_contents(module, wiki)
+        content = await self.bot.wikiops.get_contents(module, wiki)
         if content == "":
             return {}
         return lua.decode(content[6:])
@@ -260,7 +260,7 @@ class ClashStats(commands.Cog):
     async def _clash_info(self, name: str, stat: str, level: int, module: str) -> object:
         """Return a specific stat value for a unit at the requested level."""
         # TODO: think about actual uses of this function
-        stats = self._convert_from_lua(module, wiki_operations.DEFAULT_WIKI)
+        stats = await self._convert_from_lua(module, wiki_operations.DEFAULT_WIKI)
 
         if level > 0:
             return cast("dict", stats)[name][stat][level - 1]

@@ -1,20 +1,19 @@
-import logging
 import threading
 
-from utils import fandom_auth
+from utils.bot import Bot
+from utils.fandom_auth import FandomAuth
 
 DEFAULT_WIKI = "de.clashofclans"
 SUBDOMAIN_PARTS_WITH_LANG_SUFFIX = 2
 
 
-logger = logging.getLogger(__name__)
-
-
 class WikiOperations:
     """Utility functions for performing wiki operations via the MediaWiki API."""
 
-    def __init__(self) -> None:
+    def __init__(self, bot: Bot) -> None:
+        self.bot = bot
         self.semaphore = threading.Semaphore()
+        self.fandom_auth = FandomAuth()
 
     def _create_url(self, subdomain: str = DEFAULT_WIKI) -> str:
         """Build the base API URL for the provided subdomain."""
@@ -28,25 +27,25 @@ class WikiOperations:
 
     def _get_csrf_token(self, subdomain: str) -> str:
         """Retrieve a CSRF token from the wiki API."""
-        fandom_auth.fandom_login()
+        self.fandom_auth.fandom_login()
 
         params = {"action": "query", "meta": "tokens", "format": "json"}
 
-        self.semaphore.acquire(blocking=True)
+        self.semaphore.acquire()
         try:
-            response = fandom_auth.SESSION.get(url=self._create_url(subdomain), params=params)
+            response = self.fandom_auth.session.get(url=self._create_url(subdomain), params=params)
             data = response.json()
         except Exception:
-            logger.exception("An error occurred when retrieving the CSRF token!")
+            self.bot.logger.exception("An error occurred when retrieving the CSRF token!")
             return ""
         finally:
             self.semaphore.release()
 
         return data["query"]["tokens"]["csrftoken"]
 
-    def get_contents(self, page: str, wiki: str = DEFAULT_WIKI) -> str:
+    async def get_contents(self, page: str, wiki: str = DEFAULT_WIKI) -> str:
         """Fetch the contents of a wiki page as a string."""
-        fandom_auth.fandom_login()
+        self.fandom_auth.fandom_login()
 
         payload = {
             "action": "query",
@@ -58,18 +57,21 @@ class WikiOperations:
             "rvlimit": "1",
         }
 
-        self.semaphore.acquire(blocking=True)
+        self.semaphore.acquire()
         try:
-            response = fandom_auth.SESSION.get(url=self._create_url(wiki), params=payload)
+            response = self.fandom_auth.session.get(url=self._create_url(wiki), params=payload)
             data = response.json()
-        except Exception:
-            logger.exception("An error occurred when retrieving the page contents!")
+        except Exception as e:
+            msg = f"An error occurred when retrieving the page content for page '{page}'!"
+            self.bot.logger.exception(msg)
+            if self.bot.reporter:
+                await self.bot.reporter.report(e, context=msg)
             return ""
         finally:
             self.semaphore.release()
 
         if "error" in data:
-            logger.error("An error occurred when retrieving the page contents: %s", data["error"])
+            self.bot.logger.error("An error occurred when retrieving the page contents: %s", data["error"])
             return ""
 
         raw_stats = data["query"]["pages"]
@@ -78,7 +80,7 @@ class WikiOperations:
             return ""
         return str(raw_stats[wiki_module_id]["revisions"][0]["slots"]["main"]["*"])
 
-    def edit_page(self, page: str, content: str, *, bot: bool = False, wiki: str = DEFAULT_WIKI) -> dict | bool:
+    async def edit_page(self, page: str, content: str, *, bot: bool = False, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Edit a wiki page with the given content; returns API response or False on error."""
         params: dict[str, object] = {
             "action": "edit",
@@ -91,17 +93,20 @@ class WikiOperations:
         if bot:
             params["bot"] = True
 
-        self.semaphore.acquire(blocking=True)
-        response = fandom_auth.SESSION.post(self._create_url(wiki), data=params)
+        self.semaphore.acquire()
+        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
         self.semaphore.release()
 
         try:
             return response.json()
-        except Exception:
-            logger.exception("An error occurred when editing the page!")
+        except Exception as e:
+            msg = f"An error occurred when editing the page '{page}'!"
+            self.bot.logger.exception(msg)
+            if self.bot.reporter:
+                await self.bot.reporter.report(e, context=msg)
             return False
 
-    def move_page(self, old_name: str, new_name: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
+    async def move_page(self, old_name: str, new_name: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Move a wiki page to a new name; returns API response or False on error."""
         params = {
             "action": "move",
@@ -113,17 +118,20 @@ class WikiOperations:
             "assert": "user",
         }
 
-        self.semaphore.acquire(blocking=True)
-        response = fandom_auth.SESSION.post(self._create_url(wiki), data=params)
+        self.semaphore.acquire()
+        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
         self.semaphore.release()
 
         try:
             return response.json()
-        except Exception:
-            logger.exception("An error occurred when moving the page!")
+        except Exception as e:
+            msg = f"An error occurred when moving the page '{old_name}' to '{new_name}'!"
+            self.bot.logger.exception(msg)
+            if self.bot.reporter:
+                await self.bot.reporter.report(e, context=msg)
             return False
 
-    def upload_image(self, title: str, source_url: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
+    async def upload_image(self, title: str, source_url: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Upload an image to the wiki; returns API response or False on error."""
         params = {
             "action": "upload",
@@ -135,12 +143,15 @@ class WikiOperations:
             "assert": "user",
         }
 
-        self.semaphore.acquire(blocking=True)
-        response = fandom_auth.SESSION.post(self._create_url(wiki), data=params)
+        self.semaphore.acquire()
+        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
         self.semaphore.release()
 
         try:
             return response.json()
-        except Exception:
-            logger.exception("An error occurred when uploading the image!")
+        except Exception as e:
+            msg = f"An error occurred when uploading the image '{title}'!"
+            self.bot.logger.exception(msg)
+            if self.bot.reporter:
+                await self.bot.reporter.report(e, context=msg)
             return False
