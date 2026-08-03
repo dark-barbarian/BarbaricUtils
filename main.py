@@ -1,51 +1,157 @@
-import logging
-import config
+import contextlib
+import json
+import os
+import sys
+import threading
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+import anyio
 import discord
+import psutil
 from discord.ext import commands
 
-logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(levelname)s]: %(message)s', handlers=[
-    logging.FileHandler('barbaricutils.log'),
-    logging.StreamHandler()
-])
+from cogs.clash_stats import MODULE_LIST_FILE_PATH, OBSERVABLE_PAGES_LIST_FILE_PATH, ClashStats
+from cogs.scheduling import SCHEDULED_POSTS_FILE_PATH, Scheduling
+from utils.bot import BOT_REPORTS_CHANNEL_ID, Bot
+from utils.exception_reporter import ExceptionReporter
 
-bot = commands.Bot(owner_id=191530044491956224)
+if TYPE_CHECKING:
+    from cogs.page_error_reminders import PageErrorReminders
 
-####################################################################
-######################### GENERAL METHODS ##########################
-####################################################################
 
-def create_embed(title=None, description=None, color=None, footer=None):
-    embed_var = discord.Embed(title=title, description=description, color=color)
-    embed_var.set_footer(text=footer)
-    return embed_var
+BOT_OWNER_ID = 191530044491956224
+RESTART_ARGS_MIN = 3  # require at least [script, channel_id, message_id]
+
+
+bot = Bot(owner_id=BOT_OWNER_ID)
+
 
 @bot.event
-async def on_application_command_error(ctx: discord.ApplicationContext, error: discord.DiscordException):
+async def on_application_command_error(ctx: discord.ApplicationContext, error: discord.DiscordException) -> None:
+    """Handle application command errors with user-friendly responses."""
     if isinstance(error, commands.NotOwner):
-        await ctx.respond("Sorry, only the bot owner can use this command!")
+        await ctx.respond(
+            embed=bot.create_embed(description="Sorry, only the bot owner can use this command!", color=0xFF0000),
+            ephemeral=True,
+        )
+    elif isinstance(error, commands.NoPrivateMessage):
+        await ctx.respond(
+            embed=bot.create_embed(description="Sorry, this command can't be used in a DM!", color=0xFF0000)
+        )
     else:
-        logging.error(error)
+        if isinstance(error, (commands.CommandNotFound, commands.MissingPermissions, commands.BadArgument)):
+            bot.logger.exception(error)
+            raise error
+
+        error = getattr(error, "original", error)
+
+        if bot.exception_reporter:
+            await bot.exception_reporter.report(
+                error,
+                context=(
+                    f"**Command:** `/{ctx.command}`\n**User:** {ctx.author} (`{ctx.author.id}`)\n**Guild:** {ctx.guild}"
+                ),
+            )
         raise error
 
-####################################################################
-############################ COMMANDS ##############################
-####################################################################
 
-@bot.slash_command(
-        name="ping",
-        description="Check the bot's latency (test)",
-        guild_ids=[248493533537763328]
-)
+@bot.slash_command(name="ping", description="Check the bot's latency")
+async def ping(ctx: discord.ApplicationContext) -> None:
+    """Respond with the current bot latency in milliseconds."""
+    await ctx.respond(embed=bot.create_embed("Latency", f"{round(bot.latency * 1000)} ms", color=0x000000))
+
+
+@bot.slash_command(name="restart", description="Restart the bot (owner only)")
 @commands.is_owner()
-async def ping(ctx: discord.ApplicationContext):
-    await ctx.respond(embed=create_embed('Latency', f'{round(bot.latency * 1000)} ms', color=0x000000))
+async def restart(ctx: discord.ApplicationContext) -> None:
+    """Restart the bot process and notify the invoking context."""
+    interaction = await ctx.respond("Restarting...")
+    response = await cast("discord.Interaction", interaction).original_response()
+    os.execv(sys.executable, ["python", *sys.argv, str(response.channel.id), str(response.id)])  # noqa: S606
 
-##################################################################
-############################ RUN BOT #############################
-##################################################################
 
 @bot.listen(once=True)
-async def on_ready():
-    logging.info(f'Logged in as {bot.user}')
+async def on_ready() -> None:
+    """Initialize persisted data, start background tasks, and announce readiness."""
+    page_error_reminders = cast("PageErrorReminders", bot.get_cog("PageErrorReminders"))
+    scheduling = cast("Scheduling", bot.get_cog("Scheduling"))
+    clash_stats = cast("ClashStats", bot.get_cog("ClashStats"))
 
-bot.run(config.DISCORD_TOKEN)
+    # initialize json files
+    try:
+        if Path(MODULE_LIST_FILE_PATH).exists():
+            async with await anyio.open_file(MODULE_LIST_FILE_PATH, "r") as file:
+                clash_stats.data_module_names = list(
+                    dict.fromkeys(sorted(json.loads(await file.read()), key=str.lower))
+                )
+        else:
+            Path(MODULE_LIST_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
+
+        if Path(OBSERVABLE_PAGES_LIST_FILE_PATH).exists():
+            async with await anyio.open_file(OBSERVABLE_PAGES_LIST_FILE_PATH, "r") as file:
+                data = json.loads(await file.read())
+                sorted_data = {key: sorted(value, key=str.lower) for key, value in data.items()}
+                sorted_data = {key: sorted_data[key] for key in sorted(sorted_data.keys(), key=str.lower)}
+                clash_stats.pages_with_manual_entries = sorted_data
+        else:
+            Path(OBSERVABLE_PAGES_LIST_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
+
+        if Path(SCHEDULED_POSTS_FILE_PATH).exists():
+            async with await anyio.open_file(SCHEDULED_POSTS_FILE_PATH, "r") as file:
+                await scheduling.load_scheduled_posts(json.loads(await file.read()))
+        else:
+            Path(SCHEDULED_POSTS_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
+    except (OSError, json.JSONDecodeError):
+        bot.logger.exception("Error when reading and initializing json files")
+
+    bot.logger.info("Logged in as %s", bot.user)
+    page_error_reminders.check_wiki_page_errors.start(bot.get_channel(page_error_reminders.channel_id))
+
+    reports_channel = bot.get_channel(BOT_REPORTS_CHANNEL_ID)
+    if reports_channel is None:
+        with contextlib.suppress(discord.errors.DiscordException):
+            reports_channel = await bot.fetch_channel(BOT_REPORTS_CHANNEL_ID)
+    if reports_channel is not None:
+        bot.memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
+        bot.exception_reporter = ExceptionReporter(bot, cast("discord.TextChannel", reports_channel))
+
+    if bot.exception_reporter:
+        bot.install_asyncio_handler(bot.exception_reporter)
+
+    bot.watchdog_ticker.start()
+    threading.Thread(target=bot.watchdog, daemon=True).start()
+
+    await bot.wait_until_ready()
+    await cast("discord.TextChannel", bot.get_channel(BOT_REPORTS_CHANNEL_ID)).send(
+        ":arrows_counterclockwise: Finished restarting!"
+    )
+
+    # Called after bot was restarted via command
+    if len(sys.argv) >= RESTART_ARGS_MIN:
+        channel = bot.get_channel(int(sys.argv[1]))
+        msg = await cast("discord.TextChannel", channel).fetch_message(int(sys.argv[2]))
+        await msg.edit(content="Restart has finished, I'm back!")
+
+
+cogs_list = [
+    "clash_stats",
+    "page_error_reminders",
+    "scheduling",
+]
+
+for cog in cogs_list:
+    bot.load_extension(f"cogs.{cog}")
+
+if __name__ == "__main__":
+    try:
+        token = os.environ.get("DISCORD_TOKEN")
+        if not token:
+            bot.logger.error("DISCORD_TOKEN environment variable is not set. Exiting.")
+            sys.exit(1)
+        bot.run(token)
+    except Exception:
+        bot.logger.exception("Fatal error in outer run loop!")
+        sys.exit(1)
+
+# TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
