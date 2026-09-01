@@ -80,10 +80,9 @@ class Bot(commands.Bot):
         def handler(loop: AbstractEventLoop, context: dict) -> None:
             exception = context.get("exception")
 
-            if exception is None:
-                exception = RuntimeError(context["message"])
-
-            loop.create_task(reporter.report(exception, context=context.get("message")))
+            loop.create_task(
+                reporter.report(exception, error_message=context.get("message") or "", context=context.get("message"))
+            )
 
         self.loop.set_exception_handler(handler)
 

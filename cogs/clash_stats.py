@@ -278,7 +278,7 @@ class ClashStats(commands.Cog):
         default=wiki_operations.DEFAULT_WIKI,
     )
     @commands.is_owner()
-    async def wikiupdate(
+    async def wikiupdate(  # noqa: C901
         self, ctx: discord.ApplicationContext, file: discord.Attachment, module: str, wiki: str
     ) -> None:
         """Update wiki pages from a CSV attachment for the given module and wiki."""
@@ -338,6 +338,11 @@ class ClashStats(commands.Cog):
                 return
             await ctx.respond(embed=self.bot.create_embed(description="Added the data successfully!", color=0x00FF00))
         elif response == "error":
+            self.bot.logger.error("Wiki update failed. Data contents were: %s", data)
+
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(None, error_message="Wiki update failed", context=str(data))
+
             await ctx.respond(
                 embed=self.bot.create_embed(
                     description="Something went wrong!", footer=data["error"]["code"], color=0xFF0000
@@ -345,6 +350,11 @@ class ClashStats(commands.Cog):
                 ephemeral=True,
             )
         else:
+            self.bot.logger.error("Wiki update failed. Data contents were: %s", data)
+
+            if self.bot.exception_reporter:
+                await self.bot.exception_reporter.report(None, error_message="Wiki update failed", context=str(data))
+
             await ctx.respond(
                 embed=self.bot.create_embed(description="Something went wrong!", color=0xFF0000), ephemeral=True
             )
