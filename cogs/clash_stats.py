@@ -21,6 +21,8 @@ from utils.bot import Bot
 CSV_FILE_PATH = "./stats.csv"
 MODULE_LIST_FILE_PATH = "./persistent/csvmodules.json"
 OBSERVABLE_PAGES_LIST_FILE_PATH = "./persistent/updatemanually.json"
+PROBLEMATIC_SUBTROOPS_FILE_PATH = "./persistent/troops_with_subtroops.json"
+
 
 NUMBER_OF_AUTOCOMPLETE_RESULTS = 25
 """Maximum number of results to return for autocomplete handlers."""
@@ -44,11 +46,14 @@ class ClashStats(commands.Cog):
     additions = wiki.create_subgroup("add", "Commands to add items to lists")
     removals = wiki.create_subgroup("remove", "Commands to remove items from lists")
 
-    def __init__(self, bot: Bot) -> None:
+    def __init__(self, bot: Bot) -> None:  # noqa: C901
         self.bot = bot
-        self.data_module_names = []
+        self.data_module_names: list[str] = []
         self.pages_with_manual_entries: dict[str, list[str]] = {}
         """Pages with entries not in the CSV (e.g. AltDPS for Electro Titan)."""
+        self.troops_with_subtroops: list[str] = []
+        """List of troops that have problematic subtroops.
+        To avoid merging of data, these troops' subtroops get unique names later."""
 
         for opt in cast("discord.SlashCommand", self.wikiupdate).options:
             if opt.name == "module":
@@ -70,6 +75,11 @@ class ClashStats(commands.Cog):
                 opt.autocomplete = discord.utils.basic_autocomplete(
                     self._autocomplete_page_observer_names, filter=lambda *_: True
                 )
+                break
+
+        for opt in cast("discord.SlashCommand", self.remove_troop).options:
+            if opt.name == "name":
+                opt.autocomplete = discord.utils.basic_autocomplete(self._autocomplete_troop_names)
                 break
 
     async def _autocomplete_module_names(self, _ctx: discord.AutocompleteContext) -> list[str]:
@@ -143,6 +153,10 @@ class ClashStats(commands.Cog):
             f"{user_input} (Seite {page_number + 1}) ▶",
         ]
 
+    async def _autocomplete_troop_names(self, _ctx: discord.AutocompleteContext) -> list[str]:
+        """Autocomplete handler for troop names used in CSV modules."""
+        return self.troops_with_subtroops
+
     def _find_dict_by_target(self, to_search: dict, to_find: str) -> tuple[str, dict]:
         """Find a dict entry by its 'Name' field, returning the key and value dict."""
         for k, v in to_search.items():
@@ -159,7 +173,9 @@ class ClashStats(commands.Cog):
 
         return len(filled_values), (filled_values[0] if len(filled_values) == 1 else filled_values)
 
-    async def _update_wiki_stats(self, page: str, wiki: str) -> tuple[dict | bool, list[str]]:  # noqa: C901, PLR0912
+    async def _update_wiki_stats(  # noqa: C901, PLR0912, PLR0915
+        self, page: str, wiki: str
+    ) -> tuple[dict | bool, list[str]]:
         """Update a wiki data module from CSV and return the API result plus manual-update list."""
         # TODO: Revisit and refactor to reduce complexity; split into helpers
         result = {}
@@ -169,10 +185,29 @@ class ClashStats(commands.Cog):
         def flatten(xss: list[list[Any]]) -> list[Any]:
             return [x for xs in xss for x in xs]
 
+        skip_row = False
+        name_suffix = ""
+
         async with await anyio.open_file(CSV_FILE_PATH, "r") as f:
             async for row in AsyncDictReader(f):
                 if all((item.lower() in ["string", "int", "boolean", ""]) for item in row.values()):
                     continue
+
+                if name_suffix != "" and row.get("Name", "") != "":
+                    row["Name"] += name_suffix
+                    name_suffix = ""
+
+                if row.get("Name", "") in self.troops_with_subtroops:
+                    name_suffix = f" ({row.get('Name', '')})"
+
+                if row.get("Name", "") in result:
+                    skip_row = True
+                    continue  # skip duplicate entries in CSV, only first occurrence is used
+
+                if skip_row:
+                    if row.get("Name", "") == "":
+                        continue  # skip rows until a new 'Name' is found
+                    skip_row = False
 
                 for column, value in row.items():
                     if column == "Name" and value != "":
@@ -193,7 +228,6 @@ class ClashStats(commands.Cog):
         # TODO: Armeelager (Bauarbeiterbasis) does not have levels in the CSV - they are manually added in the wiki.
         # Create an exception, so that if we are looking at Armeelager (Bauarbeiterbasis) in the CSV, it is skipped.
         # Should be possible by checking the len of the corresponding dict, Armeelager (Bauarbeiterbasis) has 1 row only
-        # TODO: Lösung für Skelett finden, das taucht mehrfach auf.
         for k, v in result.items():
             for k2 in list(v.keys()):
                 if self._remove_empty_values(v[k2])[0] == 0:
@@ -478,6 +512,55 @@ class ClashStats(commands.Cog):
             return
 
         await ctx.respond(embed=self.bot.create_embed(description="Removed the page name!", color=0x00FF00))
+
+    @additions.command(name="troop", description="Adds a new troop that has a problematic subtroop")
+    @option("name", description="The name of the troop (not the subtroop)", input_type=str)
+    @commands.is_owner()
+    async def add_troop(self, ctx: discord.ApplicationContext, name: str) -> None:
+        """Add a troop name to the list of troops with problematic subtroops."""
+        bisect.insort(self.troops_with_subtroops, name, key=str.lower)
+        self.troops_with_subtroops = list(
+            dict.fromkeys(self.troops_with_subtroops)
+        )  # remove duplicates while preserving order
+
+        try:
+            async with await anyio.open_file(PROBLEMATIC_SUBTROOPS_FILE_PATH, "w") as file:
+                await file.write(json.dumps(self.troops_with_subtroops, ensure_ascii=False, indent=4))
+        except (OSError, json.JSONDecodeError):
+            self.bot.logger.exception("Failed to store troop name to file")
+            await ctx.respond(
+                embed=self.bot.create_embed(
+                    description="Added the new name until next restart, but couldn't store it.", color=0xFF0000
+                )
+            )
+            return
+
+        await ctx.respond(embed=self.bot.create_embed(description="Added the new name!", color=0x00FF00))
+
+    @removals.command(name="troop", description="Removes a troop name from the problematic troop list")
+    @option("name", description="The name of the troop you want to remove", input_type=str)
+    @commands.is_owner()
+    async def remove_troop(self, ctx: discord.ApplicationContext, name: str) -> None:
+        """Remove a troop name from the list of troops with problematic subtroops."""
+        try:
+            self.troops_with_subtroops.remove(name)
+        except ValueError:
+            await ctx.respond(embed=self.bot.create_embed(description="This troop does not exist!", color=0xFF0000))
+            return
+
+        try:
+            async with await anyio.open_file(PROBLEMATIC_SUBTROOPS_FILE_PATH, "w") as file:
+                await file.write(json.dumps(self.troops_with_subtroops, ensure_ascii=False, indent=4))
+        except (OSError, json.JSONDecodeError):
+            self.bot.logger.exception("Failed to remove troop name from file, file might be empty now")
+            await ctx.respond(
+                embed=self.bot.create_embed(
+                    description="Removed the new name until next restart, but saving failed.", color=0xFF0000
+                )
+            )
+            return
+
+        await ctx.respond(embed=self.bot.create_embed(description="Removed the troop name!", color=0x00FF00))
 
 
 def setup(bot: Bot) -> None:

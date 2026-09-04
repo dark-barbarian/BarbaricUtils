@@ -11,7 +11,12 @@ import discord
 import psutil
 from discord.ext import commands
 
-from cogs.clash_stats import MODULE_LIST_FILE_PATH, OBSERVABLE_PAGES_LIST_FILE_PATH, ClashStats
+from cogs.clash_stats import (
+    MODULE_LIST_FILE_PATH,
+    OBSERVABLE_PAGES_LIST_FILE_PATH,
+    PROBLEMATIC_SUBTROOPS_FILE_PATH,
+    ClashStats,
+)
 from cogs.scheduling import SCHEDULED_POSTS_FILE_PATH, Scheduling
 from utils.bot import BOT_REPORTS_CHANNEL_ID, Bot
 from utils.exception_reporter import ExceptionReporter
@@ -72,7 +77,7 @@ async def restart(ctx: discord.ApplicationContext) -> None:
 
 
 @bot.listen(once=True)
-async def on_ready() -> None:
+async def on_ready() -> None:  # noqa: PLR0912
     """Initialize persisted data, start background tasks, and announce readiness."""
     page_error_reminders = cast("PageErrorReminders", bot.get_cog("PageErrorReminders"))
     scheduling = cast("Scheduling", bot.get_cog("Scheduling"))
@@ -102,6 +107,14 @@ async def on_ready() -> None:
                 await scheduling.load_scheduled_posts(json.loads(await file.read()))
         else:
             Path(SCHEDULED_POSTS_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
+
+        if Path(PROBLEMATIC_SUBTROOPS_FILE_PATH).exists():
+            async with await anyio.open_file(PROBLEMATIC_SUBTROOPS_FILE_PATH, "r") as file:
+                clash_stats.troops_with_subtroops = list(
+                    dict.fromkeys(sorted(json.loads(await file.read()), key=str.lower))
+                )
+        else:
+            Path(PROBLEMATIC_SUBTROOPS_FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
     except (OSError, json.JSONDecodeError):
         bot.logger.exception("Error when reading and initializing json files")
 
@@ -155,7 +168,3 @@ if __name__ == "__main__":
         sys.exit(1)
 
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
-# liste hardcoden, für truppen, die subtroops haben. z.b. der pumpkin barbarian hat barbarian als subtroop.
-# da der barbarian aber schon existiert, wird der eintrag gemerged.
-# in diesem fall soll ein pumpkin barbarian barbarian erstellt werden
-# https://clashofclans.fandom.com/de/wiki/Modul:Troop/data?oldid=318824
