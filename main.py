@@ -155,3 +155,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
+# liste hardcoden, für truppen, die subtroops haben. z.b. der pumpkin barbarian hat barbarian als subtroop.
+# da der barbarian aber schon existiert, wird der eintrag gemerged.
+# in diesem fall soll ein pumpkin barbarian barbarian erstellt werden
+# https://clashofclans.fandom.com/de/wiki/Modul:Troop/data?oldid=318824

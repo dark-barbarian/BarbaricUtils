@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import threading
@@ -8,64 +7,104 @@ import requests
 HTTP_OK = 200
 HTTP_NO_CONTENT = 204
 
+SUBDOMAIN_PARTS_WITH_LANG_SUFFIX = 2
+
 
 class FandomAuth:
-    """Class to handle Fandom authentication and session management."""
+    """Manage MediaWiki login sessions for each wiki independently."""
 
     def __init__(self) -> None:
-        self.session = requests.Session()
-        self.session_token = ""
-        self.semaphore = threading.Semaphore()
+        self.wiki_sessions: dict[str, requests.Session] = {}
         self.logger = logging.getLogger(__name__)
+        self.semaphore = threading.Semaphore()
 
-    def fandom_login(self) -> None:
-        """Authenticate against Fandom services, storing a session token."""
-        # <Response [400]> {'error': {'id': 'session_already_available', 'code': 400, 'status': 'Bad Request', '
-        # <Response [410]> {'error': {'id': 'self_service_flow_expired', 'code': 410, 'status': 'Gone'
-        headers = {
-            "Connection": "Keep alive",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "DarkBarbarian/Bot",
-        }
+    @staticmethod
+    def create_wiki_api_url(subdomain: str) -> str:
+        """Build the MediaWiki API URL for a given Fandom wiki subdomain."""
+        parts = subdomain.split(".")
+        parts.reverse()
 
-        payload = {
-            "method": "password",
-            "identifier": os.environ.get("FANDOM_USERNAME", ""),
-            "password": os.environ.get("FANDOM_PASSWORD", ""),
-        }
+        url = "https://" + parts[0] + ".fandom.com/"
+        if len(parts) == SUBDOMAIN_PARTS_WITH_LANG_SUFFIX:
+            url = url + parts[1] + "/"
+
+        return url + "api.php"
+
+    def get_session(self, wiki: str, *, login: bool = False) -> requests.Session:
+        """Return a per-wiki requests session, optionally ensuring it is authenticated."""
+        if wiki not in self.wiki_sessions:
+            self.wiki_sessions[wiki] = requests.Session()
+        if login:
+            self.login_to_wiki(wiki)
+        return self.wiki_sessions[wiki]
+
+    def login_to_wiki(self, wiki: str) -> requests.Session:
+        """Login to the given wiki using the MediaWiki login flow."""
+        session = self.wiki_sessions.setdefault(wiki, requests.Session())
+
+        username = os.environ.get("FANDOM_USERNAME")
+        password = os.environ.get("FANDOM_PASSWORD")
+
+        api_url = self.create_wiki_api_url(wiki)
 
         self.semaphore.acquire()
-
         try:
-            response = self.session.get("https://services.fandom.com/kratos-public/self-service/login/api")
+            response = session.get(
+                api_url,
+                params={"action": "query", "meta": "tokens", "type": "login", "format": "json"},
+            )
             if response.status_code != HTTP_OK:
-                return
-            data = response.json()
+                msg = f"Login token request failed for {wiki}: {response.status_code}"
+                raise RuntimeError(msg)
 
-            response = self.session.post(data["ui"]["action"], headers=headers, data=payload)
+            data = response.json()
+            login_token = data["query"]["tokens"]["logintoken"]
+
+            payload = {
+                "action": "login",
+                "lgname": username,
+                "lgpassword": password,
+                "lgtoken": login_token,
+                "format": "json",
+            }
+
+            response = session.post(api_url, data=payload)
+
             if response.status_code != HTTP_OK:
-                return
-            data = response.json()
+                msg = f"Login request failed for {wiki}: {response.status_code}"
+                raise RuntimeError(msg)
 
-            self.session_token = data["session_token"]
-        except Exception:
-            if self.logger:
-                self.logger.exception("An error occurred when logging into Fandom!")
+            result = response.json().get("login", {}).get("result")
+
+            if result == "Aborted":
+                self.logger.warning(
+                    "Login request was aborted for %s. Assuming login is already valid. Response was: %s",
+                    wiki,
+                    response.text,
+                )
+                return session
+
+            if result != "Success":
+                msg = f"Login did not succeed for {wiki}: {response.text[:500]}"
+                raise RuntimeError(msg)
         finally:
             self.semaphore.release()
 
-    def fandom_logout(self) -> bool:
-        """Log out from Fandom services using the current session token."""
-        headers = {
-            "Content-Type": "application/json",
-        }
+        return session
 
-        payload = {"session_token": self.session_token}
+    def fandom_logout(self, wiki: str, csrf_token: str) -> bool:
+        """Log out the session for a given wiki."""
+        session = self.wiki_sessions.get(wiki)
+        if session is None or csrf_token == r"+\\":  # noqa: S105
+            return True
 
-        response = self.session.delete(
-            "https://services.fandom.com/kratos-public/self-service/logout/api",
-            headers=headers,
-            data=json.dumps(payload),
+        self.semaphore.acquire()
+        response = session.post(
+            url=self.create_wiki_api_url(wiki),
+            data={"action": "logout", "token": csrf_token, "format": "json"},
         )
+        self.semaphore.release()
 
-        return response.status_code == HTTP_NO_CONTENT
+        if response.status_code == HTTP_OK:
+            self.wiki_sessions.pop(wiki, None)
+        return response.status_code == HTTP_OK

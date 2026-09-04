@@ -1,10 +1,11 @@
 import threading
 
+import requests
+
 from utils.bot import Bot
 from utils.fandom_auth import FandomAuth
 
 DEFAULT_WIKI = "de.clashofclans"
-SUBDOMAIN_PARTS_WITH_LANG_SUFFIX = 2
 
 
 class WikiOperations:
@@ -14,39 +15,73 @@ class WikiOperations:
         self.bot = bot
         self.semaphore = threading.Semaphore()
         self.fandom_auth = FandomAuth()
+        self.wiki_sessions = self.fandom_auth.wiki_sessions
 
-    def _create_url(self, subdomain: str = DEFAULT_WIKI) -> str:
-        """Build the base API URL for the provided subdomain."""
-        parts = subdomain.split(".")
-        parts.reverse()
+    def _get_session(self, wiki: str, *, login: bool = False) -> requests.Session:
+        """Return the cached MediaWiki session for the given wiki, only logging in when needed."""
+        return self.fandom_auth.get_session(wiki, login=login)
 
-        url = "https://" + parts[0] + ".fandom.com/"
-        if len(parts) == SUBDOMAIN_PARTS_WITH_LANG_SUFFIX:
-            url = url + parts[1] + "/"
-        return url + "api.php"
+    @staticmethod
+    def _is_assert_user_failed(data: dict | list | str | None) -> bool:
+        """Return whether MediaWiki rejected the user assertion and requires re-login."""
+        if not isinstance(data, dict):
+            return False
+
+        error = data.get("error")
+        if isinstance(error, dict):
+            code = error.get("code")
+            info = str(error.get("info", "")).lower()
+            if code == "assertuserfailed" or "assertuserfailed" in info:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_read_api_denied(data: dict | list | str | None) -> bool:
+        """Return whether MediaWiki denied the API read request."""
+        if not isinstance(data, dict):
+            return False
+
+        error = data.get("error")
+        return isinstance(error, dict) and error.get("code") == "readapidenied"
 
     def _get_csrf_token(self, subdomain: str) -> str:
-        """Retrieve a CSRF token from the wiki API."""
-        self.fandom_auth.fandom_login()
+        """Retrieve a CSRF token from the wiki API using the wiki-specific session, need to be logged in."""
+        session = self._get_session(subdomain)
 
-        params = {"action": "query", "meta": "tokens", "format": "json"}
+        params = {"action": "query", "meta": "tokens", "type": "csrf", "format": "json"}
 
         self.semaphore.acquire()
-        try:
-            response = self.fandom_auth.session.get(url=self._create_url(subdomain), params=params)
-            data = response.json()
-        except Exception:
-            self.bot.logger.exception("An error occurred when retrieving the CSRF token!")
-            return ""
-        finally:
+        response = session.get(url=self.fandom_auth.create_wiki_api_url(subdomain), params=params)
+        self.semaphore.release()
+
+        data = response.json()
+        return data["query"]["tokens"]["csrftoken"]
+
+    async def _operate_on_wiki(self, wiki: str, payload: dict) -> dict | bool:
+        """Perform a wiki operation with the given parameters; returns API response or False on error."""
+        session = self._get_session(wiki)
+        payload["assert"] = "user"
+
+        for attempt in range(2):
+            self.semaphore.acquire()
+            response = session.post(url=self.fandom_auth.create_wiki_api_url(wiki), data=payload)
             self.semaphore.release()
 
-        return data["query"]["tokens"]["csrftoken"]
+            data = response.json()
+
+            if not self._is_assert_user_failed(data) or attempt == 1:
+                return data
+
+            self.bot.logger.warning("MediaWiki user assertion failed for %s; refreshing login and retrying.", wiki)
+            self.fandom_auth.login_to_wiki(wiki)
+            payload["token"] = self._get_csrf_token(wiki)
+
+        return False
 
     async def get_contents(self, page: str, wiki: str = DEFAULT_WIKI) -> str:
         """Fetch the contents of a wiki page as a string."""
-        self.fandom_auth.fandom_login()
-
+        session = self._get_session(wiki)
         payload = {
             "action": "query",
             "format": "json",
@@ -57,18 +92,19 @@ class WikiOperations:
             "rvlimit": "1",
         }
 
+        data: dict = {}
         self.semaphore.acquire()
-        try:
-            response = self.fandom_auth.session.get(url=self._create_url(wiki), params=payload)
+        for attempt in range(2):
+            response = session.get(url=self.fandom_auth.create_wiki_api_url(wiki), params=payload)
             data = response.json()
-        except Exception as e:
-            msg = f"An error occurred when retrieving the page content for page '{page}'!"
-            self.bot.logger.exception(msg)
-            if self.bot.exception_reporter:
-                await self.bot.exception_reporter.report(e, context=msg)
-            return ""
-        finally:
-            self.semaphore.release()
+
+            if not self._is_read_api_denied(data) or attempt == 1:
+                break
+
+            self.bot.logger.warning("MediaWiki denied a public read for %s; logging in and retrying.", wiki)
+            self.fandom_auth.login_to_wiki(wiki)
+            session = self._get_session(wiki)
+        self.semaphore.release()
 
         if "error" in data:
             self.bot.logger.error("An error occurred when retrieving the page contents: %s", data["error"])
@@ -82,6 +118,8 @@ class WikiOperations:
 
     async def edit_page(self, page: str, content: str, *, bot: bool = False, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Edit a wiki page with the given content; returns API response or False on error."""
+        self.fandom_auth.login_to_wiki(wiki)
+
         params: dict[str, object] = {
             "action": "edit",
             "title": page,
@@ -93,21 +131,12 @@ class WikiOperations:
         if bot:
             params["bot"] = True
 
-        self.semaphore.acquire()
-        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
-        self.semaphore.release()
-
-        try:
-            return response.json()
-        except Exception as e:
-            msg = f"An error occurred when editing the page '{page}'!"
-            self.bot.logger.exception(msg)
-            if self.bot.exception_reporter:
-                await self.bot.exception_reporter.report(e, context=msg)
-            return False
+        return await self._operate_on_wiki(wiki, params)
 
     async def move_page(self, old_name: str, new_name: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Move a wiki page to a new name; returns API response or False on error."""
+        self.fandom_auth.login_to_wiki(wiki)
+
         params = {
             "action": "move",
             "format": "json",
@@ -118,21 +147,12 @@ class WikiOperations:
             "assert": "user",
         }
 
-        self.semaphore.acquire()
-        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
-        self.semaphore.release()
-
-        try:
-            return response.json()
-        except Exception as e:
-            msg = f"An error occurred when moving the page '{old_name}' to '{new_name}'!"
-            self.bot.logger.exception(msg)
-            if self.bot.exception_reporter:
-                await self.bot.exception_reporter.report(e, context=msg)
-            return False
+        return await self._operate_on_wiki(wiki, params)
 
     async def upload_image(self, title: str, source_url: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Upload an image to the wiki; returns API response or False on error."""
+        self.fandom_auth.login_to_wiki(wiki)
+
         params = {
             "action": "upload",
             "format": "json",
@@ -143,15 +163,4 @@ class WikiOperations:
             "assert": "user",
         }
 
-        self.semaphore.acquire()
-        response = self.fandom_auth.session.post(self._create_url(wiki), data=params)
-        self.semaphore.release()
-
-        try:
-            return response.json()
-        except Exception as e:
-            msg = f"An error occurred when uploading the image '{title}'!"
-            self.bot.logger.exception(msg)
-            if self.bot.exception_reporter:
-                await self.bot.exception_reporter.report(e, context=msg)
-            return False
+        return await self._operate_on_wiki(wiki, params)
