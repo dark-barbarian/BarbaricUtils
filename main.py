@@ -168,4 +168,4 @@ if __name__ == "__main__":
         sys.exit(1)
 
 # TODO: implement scheduling stuff (wiki), add command: list observed/manual pages
-# posted manchmal schedules doppelt. nach neustart?
+# posted manchmal schedules doppelt. nach neustart? -> nach tests klappt alles normal. liegt möglicherweise an discord

@@ -1,12 +1,14 @@
 import asyncio
 import inspect
 import json
+import os
 import re
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any, TypedDict, cast
+from uuid import uuid4
 
 import discord
 from discord import SlashCommandGroup, option
@@ -16,9 +18,10 @@ from utils.bot import LOCAL_TZ, Bot
 
 EXAMPLE_DATE_FORMAT = (datetime.now(LOCAL_TZ) + timedelta(days=3)).strftime("%d.%m. %H:%M")
 SCHEDULED_POSTS_FILE_PATH = "./persistent/scheduled_posts.json"
+PROCESS_INSTANCE_ID = uuid4().hex
 
 
-class ScheduledPostReminder(TypedDict):
+class ScheduledPostOrReminder(TypedDict):
     """Container for all fields needed to schedule a post or reminder."""
 
     task_id: str
@@ -90,7 +93,7 @@ class RemindMeSelect(discord.ui.Select):
 
         remind_at = remind_at.replace(second=0, microsecond=0)
 
-        reminder: ScheduledPostReminder = {
+        reminder: ScheduledPostOrReminder = {
             "task_id": "",
             "author_id": interaction.user.id if interaction.user else 0,
             "guild_id": interaction.guild_id,
@@ -179,7 +182,7 @@ class CustomRemindModal(discord.ui.Modal):
 
         remind_at = dt.replace(second=0, microsecond=0)
 
-        reminder: ScheduledPostReminder = {
+        reminder: ScheduledPostOrReminder = {
             "task_id": "",
             "author_id": interaction.user.id if interaction.user else 0,
             "guild_id": interaction.guild_id,
@@ -279,7 +282,7 @@ class SchedulingModal(discord.ui.DesignerModal):
             await attachment.save(Path(filename))
             attachment_paths.append(filename)
 
-        post: ScheduledPostReminder = {
+        post: ScheduledPostOrReminder = {
             "task_id": task_id,
             "author_id": self.message.author.id,
             "guild_id": self.message.guild.id if self.message.guild else None,
@@ -325,7 +328,7 @@ class Scheduling(commands.Cog):
         self.bot = bot
 
         self.scheduled_tasks: dict[str, asyncio.Task] = {}
-        self.scheduled_posts: list[ScheduledPostReminder] = []
+        self.scheduled_posts: list[ScheduledPostOrReminder] = []
 
         Path("attachments").mkdir(parents=True, exist_ok=True)
 
@@ -349,7 +352,7 @@ class Scheduling(commands.Cog):
         return [
             post["task_id"]
             for post in self.scheduled_posts
-            if self._validate_post(post, None, guild_id=ctx.interaction.guild_id, author=ctx.interaction.user)
+            if self._validate_post(post, None, guild_id=ctx.interaction.guild_id)
         ]
 
     async def _autocomplete_reminder_ids(self, ctx: discord.AutocompleteContext) -> list[str]:
@@ -370,7 +373,12 @@ class Scheduling(commands.Cog):
         """Sleep for the given time, then execute the task function."""
         await asyncio.sleep(wait_seconds)
 
-        self.bot.logger.info("Finished waiting, posting %s now.", task_id)
+        self.bot.logger.info(
+            "Finished waiting, posting %s now. instance=%s pid=%s",
+            task_id,
+            PROCESS_INSTANCE_ID,
+            os.getpid(),
+        )
         result = what(task_id, *args)
         if inspect.isawaitable(result):
             await result
@@ -387,36 +395,82 @@ class Scheduling(commands.Cog):
         """Send the scheduled message, optionally publishing it, then cleanup."""
         files = [discord.File(path) for path in file_paths if Path(path).exists()]
         try:
-            message = await channel.send(content, files=files)
+            self.bot.logger.info(
+                "Sending scheduled item %s. instance=%s pid=%s channel_id=%s publish=%s",
+                task_id,
+                PROCESS_INSTANCE_ID,
+                os.getpid(),
+                channel.id,
+                publish,
+            )
+            try:
+                message = await channel.send(content, files=files)
+            except Exception:
+                self.bot.logger.exception(
+                    "Sending scheduled item %s failed. instance=%s pid=%s channel_id=%s",
+                    task_id,
+                    PROCESS_INSTANCE_ID,
+                    os.getpid(),
+                    channel.id,
+                )
+                raise
+
+            self.bot.logger.info(
+                "Sent scheduled item %s as message_id=%s. instance=%s pid=%s channel_id=%s",
+                task_id,
+                message.id,
+                PROCESS_INSTANCE_ID,
+                os.getpid(),
+                channel.id,
+            )
             if publish:
-                await message.publish()
+                self.bot.logger.info(
+                    "Publishing scheduled item %s message_id=%s. instance=%s pid=%s channel_id=%s",
+                    task_id,
+                    message.id,
+                    PROCESS_INSTANCE_ID,
+                    os.getpid(),
+                    channel.id,
+                )
+                try:
+                    await message.publish()
+                except Exception:
+                    self.bot.logger.exception(
+                        "Publishing scheduled item %s message_id=%s failed. instance=%s pid=%s channel_id=%s",
+                        task_id,
+                        message.id,
+                        PROCESS_INSTANCE_ID,
+                        os.getpid(),
+                        channel.id,
+                    )
+                    raise
+                self.bot.logger.info(
+                    "Published scheduled item %s message_id=%s. instance=%s pid=%s channel_id=%s",
+                    task_id,
+                    message.id,
+                    PROCESS_INSTANCE_ID,
+                    os.getpid(),
+                    channel.id,
+                )
         finally:
             self._cleanup_schedule_remains(task_id, file_paths)
 
-    def _get_post_by_id(self, post_id: str) -> ScheduledPostReminder | None:
+    def _get_post_by_id(self, post_id: str) -> ScheduledPostOrReminder | None:
         """Retrieve a scheduled post/reminder by its id, if present."""
         return next((d for d in self.scheduled_posts if d["task_id"] == post_id), None)
 
     def _validate_post(
         self,
-        post: ScheduledPostReminder | None,
+        post: ScheduledPostOrReminder | None,
         ctx: discord.ApplicationContext | None = None,
         guild_id: int | None = None,
-        author: discord.User | discord.Member | None = None,
     ) -> bool:
-        """Check that the post belongs to the guild/author and is not a reminder."""
+        """Check that the post belongs to the guild and is not a reminder."""
         _guild_id = guild_id or (ctx.guild_id if ctx else None)
-        _author_id = author.id if author else (ctx.author.id if ctx else None)
-        return not (
-            post is None
-            or _guild_id is None
-            or _guild_id != post["guild_id"]
-            or _author_id != post["author_id"]
-            or post["is_reminder"]
-        )
+        return not (post is None or _guild_id is None or _guild_id != post["guild_id"] or post["is_reminder"])
 
     def _validate_reminder(
-        self, reminder: ScheduledPostReminder | None, author: discord.User | discord.Member | None
+        self, reminder: ScheduledPostOrReminder | None, author: discord.User | discord.Member | None
     ) -> bool:
         """Check that the item is a reminder belonging to the author."""
         _author_id = author.id if author else None
@@ -492,9 +546,26 @@ class Scheduling(commands.Cog):
 
         return dt
 
-    async def load_scheduled_posts(self, posts: list[ScheduledPostReminder]) -> None:
+    async def load_scheduled_posts(self, posts: list[ScheduledPostOrReminder]) -> None:
         """Restore scheduled tasks from a list of persisted posts and schedule them."""
+        self.bot.logger.info(
+            "Restoring %s scheduled items. instance=%s pid=%s",
+            len(posts),
+            PROCESS_INSTANCE_ID,
+            os.getpid(),
+        )
+        seen_task_ids: set[str] = set()
         for post in posts:
+            task_id = post["task_id"]
+            if task_id in seen_task_ids:
+                self.bot.logger.warning(
+                    "Duplicate task_id %s found in persisted scheduled items. instance=%s pid=%s",
+                    task_id,
+                    PROCESS_INSTANCE_ID,
+                    os.getpid(),
+                )
+            seen_task_ids.add(task_id)
+
             wait_seconds = self._get_wait_seconds(datetime.fromisoformat(post["post_at_iso"]))
             if wait_seconds <= 0:
                 self.bot.logger.info("Trying to schedule %s failed: Due date is in the past.", post["task_id"])
@@ -520,11 +591,20 @@ class Scheduling(commands.Cog):
 
             self.scheduled_posts.append(post)
 
-            self.bot.logger.info("Scheduled %s for %s", post["task_id"], datetime.fromisoformat(post["post_at_iso"]))
+            self.bot.logger.info(
+                "Restored scheduled item %s for %s. instance=%s pid=%s channel_id=%s is_reminder=%s publish=%s",
+                task_id,
+                datetime.fromisoformat(post["post_at_iso"]),
+                PROCESS_INSTANCE_ID,
+                os.getpid(),
+                channel.id,
+                post["is_reminder"],
+                post["publish"],
+            )
 
         self._persist_posts()
 
-    async def create_scheduled_post(self, post: ScheduledPostReminder) -> str | None:
+    async def create_scheduled_post(self, post: ScheduledPostOrReminder) -> str | None:
         """Create and schedule a message or reminder and return its id; or None if failed."""
         now = datetime.now(LOCAL_TZ)
         task_id = post["task_id"] or self.generate_task_id(now, is_reminder=post["is_reminder"])
@@ -558,7 +638,7 @@ class Scheduling(commands.Cog):
 
         return task_id
 
-    async def create_reminder(self, reminder: ScheduledPostReminder) -> str | None:
+    async def create_reminder(self, reminder: ScheduledPostOrReminder) -> str | None:
         """Convenience wrapper to schedule a user DM reminder; returns task id."""
         return await self.create_scheduled_post(reminder)
 
