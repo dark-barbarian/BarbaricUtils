@@ -1,9 +1,11 @@
 import logging
 import os
+import threading
 import time as _time
 from asyncio import AbstractEventLoop, CancelledError, Task
 from collections.abc import Coroutine
 from datetime import time
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,6 +17,9 @@ from utils import wiki_operations
 from utils.exception_reporter import ExceptionReporter
 
 BOT_REPORTS_CHANNEL_ID = 1403711339355963443
+WATCHDOG_REPORT_PATH = Path("./persistent/watchdog_report.pending")
+WATCHDOG_TIMEOUT = 15
+WATCHDOG_POLL_INTERVAL = 5
 LOCAL_TZ = ZoneInfo("Europe/Berlin")
 MEMORY_INTERVAL_HOURS = 12  # must be 0 < h <= 24
 
@@ -86,15 +91,51 @@ class Bot(commands.Bot):
 
         self.loop.set_exception_handler(handler)
 
-    @tasks.loop(seconds=5)
+    @tasks.loop(seconds=WATCHDOG_POLL_INTERVAL)
     async def watchdog_ticker(self) -> None:
         """Update the watchdog timestamp every few seconds."""
-        self.watchdog_last_tick = _time.time()
+        self.watchdog_last_tick = _time.monotonic()
 
-    def watchdog(self, interval: int = 5, timeout: int = 15) -> None:
-        """Kill the process if the event loop appears frozen for too long."""
+    def watchdog(self, interval: int = WATCHDOG_POLL_INTERVAL, timeout: int = WATCHDOG_TIMEOUT) -> None:
+        """Kill the process if the event loop is blocked for too long."""
+        wait_event = threading.Event()
         while True:
-            _time.sleep(interval)
-            if _time.time() - self.watchdog_last_tick > timeout:
-                self.logger.error("Bot appears frozen, killing the process...")
-                os._exit(1)
+            wait_event.wait(interval)
+            heartbeat_age = _time.monotonic() - self.watchdog_last_tick
+            if heartbeat_age > timeout:
+                self.logger.error(
+                    "Bot appears frozen (no heartbeat for %.1f seconds; timeout is %d), killing the process...",
+                    heartbeat_age,
+                    timeout,
+                )
+                try:
+                    self._persist_watchdog_report()
+                except OSError:
+                    self.logger.exception("Unable to persist watchdog alert for the next startup")
+                finally:
+                    os._exit(1)
+
+    @staticmethod
+    def _persist_watchdog_report() -> None:
+        """Save a pending watchdog report atomically for delivery after restart."""
+        WATCHDOG_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = WATCHDOG_REPORT_PATH.with_suffix(".tmp")
+        temporary_path.write_text(str(int(_time.time())))
+        temporary_path.replace(WATCHDOG_REPORT_PATH)
+
+    async def report_pending_watchdog(self, reporter: ExceptionReporter) -> None:
+        """Send and clear a watchdog report left by the previous process."""
+        try:
+            timestamp = WATCHDOG_REPORT_PATH.read_text()
+            detected_at = int(timestamp)
+            await reporter.report(
+                None,
+                error_message="The bot event loop stopped responding.",
+                context=f"The previous bot process was shut down by the watchdog.\nDetected at <t:{detected_at}:F>.",
+                include_traceback=False,
+            )
+            WATCHDOG_REPORT_PATH.unlink()
+        except FileNotFoundError:
+            return
+        except (discord.DiscordException, OSError):
+            self.logger.exception("Unable to send or clear the pending watchdog report")

@@ -19,7 +19,12 @@ class ExceptionReporter:
         self.channel = channel
 
     async def report(
-        self, exception: BaseException | None, *, error_message: str = "", context: str | None = None
+        self,
+        exception: BaseException | None,
+        *,
+        error_message: str = "",
+        context: str | None = None,
+        include_traceback: bool = True,
     ) -> None:
         """Report an exception to the designated Discord channel with detailed information."""
         if exception is None:
@@ -42,6 +47,9 @@ class ExceptionReporter:
             embed.add_field(name="Time", value=f"<t:{int(time.time())}:F>", inline=False)
 
         await self.channel.send(embed=embed)
+
+        if not include_traceback:
+            return
 
         traceback_text = "".join(
             traceback.format_exception(

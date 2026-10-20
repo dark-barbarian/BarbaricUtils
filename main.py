@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -77,7 +78,7 @@ async def restart(ctx: discord.ApplicationContext) -> None:
 
 
 @bot.listen(once=True)
-async def on_ready() -> None:  # noqa: PLR0912
+async def on_ready() -> None:  # noqa: PLR0912, PLR0915
     """Initialize persisted data, start background tasks, and announce readiness."""
     page_error_reminders = cast("PageErrorReminders", bot.get_cog("PageErrorReminders"))
     scheduling = cast("Scheduling", bot.get_cog("Scheduling"))
@@ -126,12 +127,14 @@ async def on_ready() -> None:  # noqa: PLR0912
         with contextlib.suppress(discord.errors.DiscordException):
             reports_channel = await bot.fetch_channel(BOT_REPORTS_CHANNEL_ID)
     if reports_channel is not None:
-        bot.memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
         bot.exception_reporter = ExceptionReporter(bot, cast("discord.TextChannel", reports_channel))
+        await bot.report_pending_watchdog(bot.exception_reporter)
+        bot.memory_reporter.start(reports_channel, psutil.Process(os.getpid()))
 
     if bot.exception_reporter:
         bot.install_asyncio_handler(bot.exception_reporter)
 
+    bot.watchdog_last_tick = time.monotonic()
     bot.watchdog_ticker.start()
     threading.Thread(target=bot.watchdog, daemon=True).start()
 
