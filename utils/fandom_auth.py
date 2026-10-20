@@ -4,6 +4,8 @@ import threading
 
 import requests
 
+from utils.bot import Bot
+
 HTTP_OK = 200
 HTTP_NO_CONTENT = 204
 
@@ -13,7 +15,8 @@ SUBDOMAIN_PARTS_WITH_LANG_SUFFIX = 2
 class FandomAuth:
     """Manage MediaWiki login sessions for each wiki independently."""
 
-    def __init__(self) -> None:
+    def __init__(self, bot: Bot) -> None:
+        self.bot = bot
         self.wiki_sessions: dict[str, requests.Session] = {}
         self.logger = logging.getLogger(__name__)
         self.semaphore = threading.Semaphore()
@@ -30,16 +33,14 @@ class FandomAuth:
 
         return url + "api.php"
 
-    def get_session(self, wiki: str, *, login: bool = False) -> requests.Session:
-        """Return a per-wiki requests session, optionally ensuring it is authenticated."""
+    async def get_session(self, wiki: str) -> requests.Session:
+        """Return a per-wiki requests session."""
         if wiki not in self.wiki_sessions:
             self.wiki_sessions[wiki] = requests.Session()
-        if login:
-            self.login_to_wiki(wiki)
         return self.wiki_sessions[wiki]
 
-    def login_to_wiki(self, wiki: str) -> requests.Session:
-        """Login to the given wiki using the MediaWiki login flow."""
+    async def login_to_wiki(self, wiki: str) -> bool:
+        """Login to the given wiki using the MediaWiki login flow, returning True on success or False on failure."""
         session = self.wiki_sessions.setdefault(wiki, requests.Session())
 
         username = os.environ.get("FANDOM_USERNAME")
@@ -55,7 +56,9 @@ class FandomAuth:
             )
             if response.status_code != HTTP_OK:
                 msg = f"Login token request failed for {wiki}: {response.status_code}"
-                raise RuntimeError(msg)
+                if self.bot.exception_reporter:
+                    await self.bot.exception_reporter.report(None, error_message=msg, include_traceback=False)
+                return False
 
             data = response.json()
             login_token = data["query"]["tokens"]["logintoken"]
@@ -72,7 +75,9 @@ class FandomAuth:
 
             if response.status_code != HTTP_OK:
                 msg = f"Login request failed for {wiki}: {response.status_code}"
-                raise RuntimeError(msg)
+                if self.bot.exception_reporter:
+                    await self.bot.exception_reporter.report(None, error_message=msg, include_traceback=False)
+                return False
 
             result = response.json().get("login", {}).get("result")
 
@@ -82,15 +87,17 @@ class FandomAuth:
                     wiki,
                     response.text,
                 )
-                return session
+                return True
 
             if result != "Success":
                 msg = f"Login did not succeed for {wiki}: {response.text[:500]}"
-                raise RuntimeError(msg)
+                if self.bot.exception_reporter:
+                    await self.bot.exception_reporter.report(None, error_message=msg)
+                return False
         finally:
             self.semaphore.release()
 
-        return session
+        return True
 
     def fandom_logout(self, wiki: str, csrf_token: str) -> bool:
         """Log out the session for a given wiki."""

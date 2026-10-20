@@ -14,12 +14,12 @@ class WikiOperations:
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.semaphore = threading.Semaphore()
-        self.fandom_auth = FandomAuth()
+        self.fandom_auth = FandomAuth(bot)
         self.wiki_sessions = self.fandom_auth.wiki_sessions
 
-    def _get_session(self, wiki: str, *, login: bool = False) -> requests.Session:
-        """Return the cached MediaWiki session for the given wiki, only logging in when needed."""
-        return self.fandom_auth.get_session(wiki, login=login)
+    async def _get_session(self, wiki: str) -> requests.Session:
+        """Return the cached MediaWiki session for the given wiki."""
+        return await self.fandom_auth.get_session(wiki)
 
     @staticmethod
     def _is_assert_user_failed(data: dict | list | str | None) -> bool:
@@ -45,9 +45,9 @@ class WikiOperations:
         error = data.get("error")
         return isinstance(error, dict) and error.get("code") == "readapidenied"
 
-    def _get_csrf_token(self, subdomain: str) -> str:
+    async def _get_csrf_token(self, subdomain: str) -> str:
         """Retrieve a CSRF token from the wiki API using the wiki-specific session, need to be logged in."""
-        session = self._get_session(subdomain)
+        session = await self._get_session(subdomain)
 
         params = {"action": "query", "meta": "tokens", "type": "csrf", "format": "json"}
 
@@ -60,7 +60,7 @@ class WikiOperations:
 
     async def _operate_on_wiki(self, wiki: str, payload: dict) -> dict | bool:
         """Perform a wiki operation with the given parameters; returns API response or False on error."""
-        session = self._get_session(wiki)
+        session = await self._get_session(wiki)
         payload["assert"] = "user"
 
         for attempt in range(2):
@@ -74,14 +74,16 @@ class WikiOperations:
                 return data
 
             self.bot.logger.warning("MediaWiki user assertion failed for %s; refreshing login and retrying.", wiki)
-            self.fandom_auth.login_to_wiki(wiki)
+            if not await self.fandom_auth.login_to_wiki(wiki):
+                self.bot.logger.error("Failed to log in to %s after user assertion failure.", wiki)
+                return False
             payload["token"] = self._get_csrf_token(wiki)
 
         return False
 
     async def get_contents(self, page: str, wiki: str = DEFAULT_WIKI) -> str:
         """Fetch the contents of a wiki page as a string."""
-        session = self._get_session(wiki)
+        session = await self._get_session(wiki)
         payload = {
             "action": "query",
             "format": "json",
@@ -102,8 +104,12 @@ class WikiOperations:
                 break
 
             self.bot.logger.warning("MediaWiki denied a public read for %s; logging in and retrying.", wiki)
-            self.fandom_auth.login_to_wiki(wiki)
-            session = self._get_session(wiki)
+
+            if not await self.fandom_auth.login_to_wiki(wiki):
+                self.bot.logger.error("Failed to log in to %s after read API denial.", wiki)
+                self.semaphore.release()
+                return ""
+            session = await self._get_session(wiki)
         self.semaphore.release()
 
         if "error" in data:
@@ -118,13 +124,15 @@ class WikiOperations:
 
     async def edit_page(self, page: str, content: str, *, bot: bool = False, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Edit a wiki page with the given content; returns API response or False on error."""
-        self.fandom_auth.login_to_wiki(wiki)
+        if not await self.fandom_auth.login_to_wiki(wiki):
+            self.bot.logger.error("Failed to log in to %s before editing page %s.", wiki, page)
+            return False
 
         params: dict[str, object] = {
             "action": "edit",
             "title": page,
             "text": content,
-            "token": self._get_csrf_token(wiki),
+            "token": await self._get_csrf_token(wiki),
             "format": "json",
             "assert": "user",
         }
@@ -135,7 +143,9 @@ class WikiOperations:
 
     async def move_page(self, old_name: str, new_name: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Move a wiki page to a new name; returns API response or False on error."""
-        self.fandom_auth.login_to_wiki(wiki)
+        if not await self.fandom_auth.login_to_wiki(wiki):
+            self.bot.logger.error("Failed to log in to %s before moving page %s to %s.", wiki, old_name, new_name)
+            return False
 
         params = {
             "action": "move",
@@ -143,7 +153,7 @@ class WikiOperations:
             "from": old_name,
             "to": new_name,
             "noredirect": 1,
-            "token": self._get_csrf_token(wiki),
+            "token": await self._get_csrf_token(wiki),
             "assert": "user",
         }
 
@@ -151,7 +161,9 @@ class WikiOperations:
 
     async def upload_image(self, title: str, source_url: str, wiki: str = DEFAULT_WIKI) -> dict | bool:
         """Upload an image to the wiki; returns API response or False on error."""
-        self.fandom_auth.login_to_wiki(wiki)
+        if not await self.fandom_auth.login_to_wiki(wiki):
+            self.bot.logger.error("Failed to log in to %s before uploading image %s.", wiki, title)
+            return False
 
         params = {
             "action": "upload",
@@ -159,7 +171,7 @@ class WikiOperations:
             "filename": title,
             "url": source_url,
             "ignorewarnings": True,
-            "token": self._get_csrf_token(wiki),
+            "token": await self._get_csrf_token(wiki),
             "assert": "user",
         }
 
